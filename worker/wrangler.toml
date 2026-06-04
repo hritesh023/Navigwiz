@@ -1,0 +1,9 @@
+name = "navigwiz-api"
+main = "index.js"
+compatibility_date = "2025-04-01"
+
+[env.production]
+vars = { ENVIRONMENT = "production" }
+
+[env.development]
+vars = { ENVIRONMENT = "development" }

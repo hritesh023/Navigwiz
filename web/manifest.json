@@ -1,0 +1,35 @@
+{
+"name": "Navigwiz",
+    "short_name": "Navigwiz",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#09090B",
+    "theme_color": "#8B5CF6",
+    "description": "Open-source Navigwiz browser with custom search and Apex Ai.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}

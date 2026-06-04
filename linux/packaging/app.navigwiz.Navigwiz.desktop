@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Navigwiz
+Comment=Open-source standalone browser with Navigwiz search and Apex Ai
+Exec=navigwiz %u
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true

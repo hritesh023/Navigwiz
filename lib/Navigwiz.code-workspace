@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "Navigwiz",
+			"path": ".."
+		},
+		{
+			"name": "acronous_llm",
+			"path": "../../Acronous Ai/acronous_llm"
+		}
+	],
+	"settings": {}
+}
