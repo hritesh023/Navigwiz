@@ -4,6 +4,7 @@ class WorkspaceItem {
   final String title;
   final String content;
   final String? url;
+  final String? filePath;
   final DateTime createdAt;
   final DateTime updatedAt;
   final Map<String, dynamic> metadata;
@@ -12,21 +13,29 @@ class WorkspaceItem {
     required this.id,
     required this.type,
     required this.title,
-    required this.content,
+    this.content = '',
     this.url,
+    this.filePath,
     DateTime? createdAt,
     DateTime? updatedAt,
     this.metadata = const {},
   }) : createdAt = createdAt ?? DateTime.now(),
        updatedAt = updatedAt ?? DateTime.now();
 
-  WorkspaceItem copyWith({String? title, String? content, String? url, Map<String, dynamic>? metadata}) {
+  WorkspaceItem copyWith({
+    String? title,
+    String? content,
+    String? url,
+    String? filePath,
+    Map<String, dynamic>? metadata,
+  }) {
     return WorkspaceItem(
       id: id,
       type: type,
       title: title ?? this.title,
       content: content ?? this.content,
       url: url ?? this.url,
+      filePath: filePath ?? this.filePath,
       createdAt: createdAt,
       updatedAt: DateTime.now(),
       metadata: metadata ?? this.metadata,
@@ -35,13 +44,18 @@ class WorkspaceItem {
 
   Map<String, dynamic> toJson() => {
     'id': id, 'type': type, 'title': title, 'content': content,
-    'url': url, 'created_at': createdAt.toIso8601String(),
+    'url': url, 'file_path': filePath,
+    'created_at': createdAt.toIso8601String(),
     'updated_at': updatedAt.toIso8601String(), 'metadata': metadata,
   };
 
   factory WorkspaceItem.fromJson(Map<String, dynamic> json) => WorkspaceItem(
-    id: json['id'] ?? '', type: json['type'] ?? '', title: json['title'] ?? '',
-    content: json['content'] ?? '', url: json['url'],
+    id: json['id'] ?? '',
+    type: json['type'] ?? '',
+    title: json['title'] ?? '',
+    content: json['content'] ?? '',
+    url: json['url'],
+    filePath: json['file_path'],
     createdAt: DateTime.tryParse(json['created_at'] ?? ''),
     updatedAt: DateTime.tryParse(json['updated_at'] ?? ''),
     metadata: Map<String, dynamic>.from(json['metadata'] ?? {}),
@@ -68,7 +82,12 @@ class Workspace {
   }) : createdAt = createdAt ?? DateTime.now(),
        updatedAt = updatedAt ?? DateTime.now();
 
-  Workspace copyWith({String? name, String? description, String? icon, List<WorkspaceItem>? items}) {
+  Workspace copyWith({
+    String? name,
+    String? description,
+    String? icon,
+    List<WorkspaceItem>? items,
+  }) {
     return Workspace(
       id: id,
       name: name ?? this.name,
@@ -83,11 +102,14 @@ class Workspace {
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'description': description, 'icon': icon,
     'items': items.map((i) => i.toJson()).toList(),
-    'created_at': createdAt.toIso8601String(), 'updated_at': updatedAt.toIso8601String(),
+    'created_at': createdAt.toIso8601String(),
+    'updated_at': updatedAt.toIso8601String(),
   };
 
   factory Workspace.fromJson(Map<String, dynamic> json) => Workspace(
-    id: json['id'] ?? '', name: json['name'] ?? '', description: json['description'] ?? '',
+    id: json['id'] ?? '',
+    name: json['name'] ?? '',
+    description: json['description'] ?? '',
     icon: json['icon'] ?? 'workspaces',
     items: (json['items'] as List?)?.map((i) => WorkspaceItem.fromJson(i)).toList() ?? [],
     createdAt: DateTime.tryParse(json['created_at'] ?? ''),

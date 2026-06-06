@@ -1,0 +1,77 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.3
+pydantic-settings==2.7.0
+python-multipart==0.0.19
+httpx==0.28.1
+websockets==14.1
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+supabase==2.9.0
+
+# Memory & Vector Search
+chromadb==0.6.3
+faiss-cpu==1.9.0
+sentence-transformers==3.3.1
+numpy==1.26.4
+networkx==3.4.2
+
+# LLM & Workflows
+langchain==0.3.14
+langchain-openai==0.2.14
+langchain-community==0.3.14
+langgraph==0.2.59
+openai==1.58.1
+
+# Web Scraping
+beautifulsoup4==4.12.3
+scrapy==2.12.0
+trafilatura==2.0.0
+duckduckgo_search==7.5.1
+playwright==1.50.0
+selenium==4.28.1
+
+# Document Processing
+PyMuPDF==1.25.2
+pdfplumber==0.11.4
+python-docx==1.1.2
+openpyxl==3.1.5
+pandas==2.2.3
+unstructured==0.16.16
+
+# Image & Vision
+opencv-python-headless==4.11.0.86
+Pillow==11.1.0
+easyocr==1.7.2
+pytesseract==0.3.13
+
+# Audio
+openai-whisper==20240930
+TTS==0.22.0
+
+# Background Tasks
+celery==5.4.0
+redis==5.2.1
+apscheduler==3.11.0
+
+# Storage & Media
+cloudinary==1.41.0
+boto3==1.36.10
+
+# Async
+aiofiles==24.1.0
+
+# Monitoring
+prometheus-client==0.21.1
+sentry-sdk==2.19.0
+
+# ML
+torch==2.5.1
+scikit-learn==1.6.1
+transformers==4.48.0
+
+# Utilities
+python-dotenv==1.0.1
+orjson==3.10.12

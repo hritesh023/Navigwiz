@@ -1,0 +1,51 @@
+[project]
+name = "navigwiz-backend"
+version = "2.0.0"
+description = "Navigwiz AI-Native Digital Companion Backend"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "python-multipart>=0.0.19",
+    "httpx>=0.28.0",
+    "websockets>=14.0",
+    "python-jose[cryptography]>=3.3.0",
+    "supabase>=2.9.0",
+    "chromadb>=0.6.0",
+    "sentence-transformers>=3.3.0",
+    "numpy>=1.26.0",
+    "networkx>=3.4.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph>=0.2.0",
+    "beautifulsoup4>=4.12.0",
+    "trafilatura>=2.0.0",
+    "duckduckgo_search>=7.5.0",
+    "playwright>=1.50.0",
+    "PyMuPDF>=1.25.0",
+    "pdfplumber>=0.11.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "pandas>=2.2.0",
+    "opencv-python-headless>=4.11.0",
+    "Pillow>=11.1.0",
+    "easyocr>=1.7.0",
+    "pytesseract>=0.3.0",
+    "openai-whisper>=20240930",
+    "celery>=5.4.0",
+    "redis>=5.2.0",
+    "apscheduler>=3.11.0",
+    "sentry-sdk>=2.19.0",
+    "scikit-learn>=1.6.0",
+    "torch>=2.5.0",
+    "transformers>=4.48.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

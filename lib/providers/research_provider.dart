@@ -142,7 +142,10 @@ class ResearchProvider extends ChangeNotifier {
 
       List<ResearchFinding> findings = [];
       if (keyFindingsText.isNotEmpty) {
-        final lines = keyFindingsText.split('\n').where((l) => l.trim().startsWith('-') || l.trim().startsWith('*') || l.trim().startsWith(RegExp(r'^\d+\.'))).toList();
+        final lines = keyFindingsText.split('\n').where((l) {
+          final t = l.trim();
+          return t.startsWith('-') || t.startsWith('*') || RegExp(r'^\d+\.').hasMatch(t);
+        }).toList();
         findings = lines.take(8).toList().asMap().entries.map((e) {
           final findingText = e.value.replaceAll(RegExp(r'^[\s*\-0-9.]+'), '').trim();
           return ResearchFinding(
@@ -168,7 +171,7 @@ class ResearchProvider extends ChangeNotifier {
       List<String> recommendations = [];
       if (recommendationsText.isNotEmpty) {
         recommendations = recommendationsText.split('\n')
-            .where((l) => l.trim().startsWith('-') || l.trim().startsWith('*') || l.trim().startsWith(RegExp(r'^\d+\.')))
+            .where((l) { final t = l.trim(); return t.startsWith('-') || t.startsWith('*') || RegExp(r'^\d+\.').hasMatch(t); })
             .map((l) => l.replaceAll(RegExp(r'^[\s*\-0-9.]+'), '').trim())
             .where((l) => l.isNotEmpty)
             .take(5)

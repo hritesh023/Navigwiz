@@ -278,7 +278,8 @@ class BrowserService extends ChangeNotifier {
       return 'https://$url';
     }
 
-    return DomainHelper.getNavigwizSearchUrl(url);
+    final encodedQuery = Uri.encodeComponent(url);
+    return 'https://www.google.com/search?q=$encodedQuery';
   }
 
   Future<void> goBack() async {

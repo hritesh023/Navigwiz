@@ -176,7 +176,7 @@ class AIService extends ChangeNotifier {
       results = await searchByCategory(query, category);
       if (category == 'videos') {
         videoResults = results.where((r) => r.imageUrl != null).toList();
-        imageResults = videoResults;
+        imageResults = List.from(videoResults);
       }
       if (category == 'books') {
         bookResults = results;
@@ -383,7 +383,7 @@ class AIService extends ChangeNotifier {
         description: (item['content']?.toString().trim() ?? item['snippet']?.toString().trim() ?? ''),
         imageUrl: item['img_src']?.toString().trim(),
         publishedDate: item['publishedDate']?.toString().trim(),
-        relevanceScore: 1 - (results.length * 0.02),
+        relevanceScore: (1 - (results.length * 0.02)).clamp(0.0, 1.0),
       ));
     }
     return results;
@@ -437,7 +437,7 @@ class AIService extends ChangeNotifier {
           title: rawTitle,
           url: url,
           description: snippet,
-          relevanceScore: 1 - (results.length * 0.01),
+          relevanceScore: (1 - (results.length * 0.01)).clamp(0.0, 1.0),
         ));
       }
 
@@ -486,7 +486,7 @@ class AIService extends ChangeNotifier {
           title: rawTitle,
           url: url,
           description: '',
-          relevanceScore: 1 - (results.length * 0.01),
+          relevanceScore: (1 - (results.length * 0.01)).clamp(0.0, 1.0),
         ));
       }
 

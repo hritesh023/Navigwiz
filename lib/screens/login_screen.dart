@@ -33,7 +33,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       if (auth.isSignedIn) {
-        Navigator.of(context).pushReplacementNamed('/home');
+      Navigator.of(context).pushReplacementNamed('/');
       }
     });
   }

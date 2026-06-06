@@ -184,6 +184,12 @@ class ThemeService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> toggleTheme() async {
+    _isDarkMode = !_isDarkMode;
+    await _saveThemeSettings();
+    notifyListeners();
+  }
+
   Future<void> _saveThemeSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_primaryColorKey, _primaryColor.toARGB32());

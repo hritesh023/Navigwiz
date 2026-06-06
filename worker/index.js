@@ -33,11 +33,11 @@ function respondError(message, status = 500) {
   return respondJson({ response: message, type: 'error' }, status);
 }
 
-async function handleChat(request) {
+async function handleChat(request, env) {
   try {
-    const apiKey = OPENAI_API_KEY;
+    const apiKey = env.OPENAI_API_KEY || env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      return respondError('OpenAI API key not configured on server.', 500);
+      return respondError('AI API key not configured on server.', 500);
     }
 
     const body = await request.json();
@@ -399,7 +399,7 @@ async function handleImage(request) {
   }
 }
 
-async function handleRequest(request) {
+async function handleRequest(request, env) {
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
@@ -416,7 +416,7 @@ async function handleRequest(request) {
       if (request.method !== 'POST') {
         return respondError('Method not allowed', 405);
       }
-      return handleChat(request);
+      return handleChat(request, env);
 
     case '/v1/image/generate':
       if (request.method !== 'POST') {

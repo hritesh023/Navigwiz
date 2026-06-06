@@ -17,6 +17,8 @@ import 'providers/workspace_provider.dart';
 import 'providers/research_provider.dart';
 import 'providers/memory_provider.dart';
 import 'providers/extraction_provider.dart';
+import 'providers/project_provider.dart';
+import 'providers/settings_provider.dart';
 import 'config/app_config.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -34,6 +36,8 @@ void main(List<String> args) async {
   final researchProvider = ResearchProvider(aiService: aiService);
   final memoryProvider = MemoryProvider();
   final extractionProvider = ExtractionProvider();
+  final projectProvider = ProjectProvider();
+  final settingsProvider = SettingsProvider();
 
   await logger.initialize();
   await themeService.initialize();
@@ -42,6 +46,8 @@ void main(List<String> args) async {
   await researchProvider.initialize();
   await memoryProvider.initialize();
   await extractionProvider.initialize();
+  await projectProvider.initialize();
+  await settingsProvider.initialize();
 
   if (!kIsWeb) {
     await browserService.initialize(initialUrl: _initialUrlFromArgs(args));
@@ -58,6 +64,8 @@ void main(List<String> args) async {
       researchProvider: researchProvider,
       memoryProvider: memoryProvider,
       extractionProvider: extractionProvider,
+      projectProvider: projectProvider,
+      settingsProvider: settingsProvider,
     ),
   );
 
@@ -96,6 +104,8 @@ class NavigwizApp extends StatelessWidget {
   final ResearchProvider researchProvider;
   final MemoryProvider memoryProvider;
   final ExtractionProvider extractionProvider;
+  final ProjectProvider projectProvider;
+  final SettingsProvider settingsProvider;
 
   const NavigwizApp({
     super.key,
@@ -108,6 +118,8 @@ class NavigwizApp extends StatelessWidget {
     required this.researchProvider,
     required this.memoryProvider,
     required this.extractionProvider,
+    required this.projectProvider,
+    required this.settingsProvider,
   });
 
   @override
@@ -123,9 +135,11 @@ class NavigwizApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: researchProvider),
         ChangeNotifierProvider.value(value: memoryProvider),
         ChangeNotifierProvider.value(value: extractionProvider),
+        ChangeNotifierProvider.value(value: projectProvider),
+        ChangeNotifierProvider.value(value: settingsProvider),
       ],
-      child: Consumer<ThemeService>(
-        builder: (context, themeService, child) {
+      child: Consumer2<ThemeService, SettingsProvider>(
+        builder: (context, themeService, settingsProvider, child) {
           return MaterialApp(
             navigatorKey: navigatorKey,
             title: AppConfig.appName,
@@ -137,6 +151,7 @@ class NavigwizApp extends StatelessWidget {
             routes: {
               '/': (context) => const BrowserScreen(),
               '/login': (context) => const LoginScreen(),
+              '/home': (context) => const BrowserScreen(),
             },
           );
         },
