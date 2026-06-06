@@ -17,6 +17,34 @@ class BrowserTab {
     this.progress = 0,
   });
 
+  factory BrowserTab.fromJson(Map<String, dynamic> json) => BrowserTab(
+    id: json['id'] as String? ?? '',
+    title: json['title'] as String? ?? 'New Tab',
+    url: json['url'] as String? ?? 'about:blank',
+    favicon: _parseIcon(json['favicon'] as String? ?? 'language'),
+    isLoading: json['isLoading'] as bool? ?? false,
+    progress: json['progress'] as int? ?? 0,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'url': url,
+    'favicon': favicon.codePoint > 0 ? String.fromCharCode(favicon.codePoint) : 'language',
+    'isLoading': isLoading,
+    'progress': progress,
+  };
+
+  static IconData _parseIcon(String iconName) {
+    switch (iconName) {
+      case 'language': return Icons.language;
+      case 'search': return Icons.search;
+      case 'lock': return Icons.lock;
+      case 'lock_open': return Icons.lock_open;
+      default: return Icons.language;
+    }
+  }
+
   BrowserTab copyWith({
     String? id,
     String? title,

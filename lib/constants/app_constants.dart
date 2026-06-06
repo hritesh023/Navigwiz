@@ -116,6 +116,19 @@ class AppStrings {
     'Explain machine learning simply',
     'Help me debug my code',
   ];
+
+  // New Navigwiz OS strings
+  static const String osTagline = 'AI-Powered Internet Operating System';
+  static const String goalHint = 'What would you like to achieve?';
+  static const String goalSubtitle = 'Describe your goal — I\'ll research, analyze, and organize it for you';
+  static const String examplePrompt = 'e.g. Research best laptops under ₹80,000...';
+  static const String researchMode = 'Research Mode';
+  static const String workspaceLabel = 'Workspaces';
+  static const String memoryLabel = 'Memory';
+  static const String extractionLabel = 'Extract Data';
+  static const String signInLabel = 'Sign In';
+  static const String signUpLabel = 'Create Account';
+  static const String welcomeBack = 'Welcome Back';
 }
 
 class AppPrefKeys {

@@ -4,22 +4,20 @@ import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/browser_service.dart';
 import '../services/theme_service.dart';
+import '../providers/memory_provider.dart';
 import '../utils/domain_helper.dart';
 import '../widgets/address_bar.dart';
 import '../widgets/browser_tab_bar.dart';
-import '../widgets/customization_panel.dart';
-import '../widgets/ai_assistant_side_panel.dart';
 import '../widgets/saturn_logo.dart';
-import '../widgets/acronous_logo.dart';
-import '../widgets/navigwiz_search_results.dart';
-import 'acronous_chat_page.dart';
 
 class BrowserScreen extends StatefulWidget {
   final bool enableEmbeddedWebView;
+  final String? initialUrl;
 
   const BrowserScreen({
     super.key,
     this.enableEmbeddedWebView = true,
+    this.initialUrl,
   });
 
   @override
@@ -27,8 +25,6 @@ class BrowserScreen extends StatefulWidget {
 }
 
 class _BrowserScreenState extends State<BrowserScreen> {
-  bool _showCustomizationPanel = false;
-  bool _showAiAssistantPanel = false;
   WebViewController? _webViewController;
   final TextEditingController _homeSearchController = TextEditingController();
 
@@ -39,10 +35,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
       _initializeBrowser();
     } else {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final browserService =
-            Provider.of<BrowserService>(context, listen: false);
+        final browserService = Provider.of<BrowserService>(context, listen: false);
         if (browserService.tabs.isEmpty) {
-          browserService.createNewTab();
+          browserService.createNewTab(url: widget.initialUrl);
         }
       });
     }
@@ -60,8 +55,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (int progress) {
-            final browserService =
-                Provider.of<BrowserService>(context, listen: false);
+            if (!mounted) return;
+            final browserService = Provider.of<BrowserService>(context, listen: false);
             final activeTab = browserService.activeTab;
             if (activeTab != null &&
                 (progress == 100 ||
@@ -75,8 +70,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             }
           },
           onPageStarted: (String url) {
-            final browserService =
-                Provider.of<BrowserService>(context, listen: false);
+            if (!mounted) return;
+            final browserService = Provider.of<BrowserService>(context, listen: false);
             if (browserService.activeTab != null) {
               browserService.updateTab(
                 browserService.activeTab!.id,
@@ -86,8 +81,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             }
           },
           onPageFinished: (String url) {
-            final browserService =
-                Provider.of<BrowserService>(context, listen: false);
+            if (!mounted) return;
+            final browserService = Provider.of<BrowserService>(context, listen: false);
             if (browserService.activeTab != null) {
               browserService.updateTab(
                 browserService.activeTab!.id,
@@ -96,21 +91,23 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 progress: 100,
               );
             }
+            Provider.of<MemoryProvider>(context, listen: false).remember(
+              type: 'visit',
+              content: 'Visited: $url',
+              url: url,
+            );
           },
-          onWebResourceError: (WebResourceError error) {
-            // Handle errors
-          },
+          onWebResourceError: (WebResourceError error) {},
         ),
       );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final browserService =
-          Provider.of<BrowserService>(context, listen: false);
+      final browserService = Provider.of<BrowserService>(context, listen: false);
       if (_webViewController != null) {
         browserService.setWebViewController(_webViewController!);
       }
       if (browserService.tabs.isEmpty) {
-        browserService.createNewTab();
+        browserService.createNewTab(url: widget.initialUrl);
       }
     });
   }
@@ -119,14 +116,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Consumer2<BrowserService, ThemeService>(
-        builder: (context, browserService, themeService, child) {
+      body: Consumer<BrowserService>(
+        builder: (context, browserService, child) {
           return Column(
             children: [
-              // Modern title bar with logo
-              _buildTitleBar(themeService),
-
-              // Tab bar
+              _buildTitleBar(),
               BrowserTabBar(
                 tabs: browserService.tabs,
                 activeTabIndex: browserService.activeTabIndex,
@@ -134,8 +128,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 onTabClosed: (tabId) => browserService.closeTab(tabId),
                 onNewTab: () => browserService.createNewTab(),
               ),
-
-              // Address bar
               AddressBar(
                 url: browserService.activeTab?.url ?? '',
                 isLoading: browserService.activeTab?.isLoading ?? false,
@@ -146,63 +138,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 onReloadPressed: () => browserService.reload(),
                 canGoBack: browserService.canGoBack,
                 canGoForward: browserService.canGoForward,
-                trailingActions: [
-                  _buildAcronousButton(),
-                  const SizedBox(width: 4),
-                  _buildToolbarButton(
-                    icon: _showCustomizationPanel ? Icons.close : Icons.palette,
-                    tooltip: 'Customize',
-                    isActive: _showCustomizationPanel,
-                    onPressed: () => setState(() =>
-                        _showCustomizationPanel = !_showCustomizationPanel),
-                  ),
-                ],
               ),
-
-              // Main content area
               Expanded(
-                child: Stack(
-                  children: [
-                    // Web view
-                    browserService.activeTab != null
-                        ? _buildWebView(browserService)
-                        : _buildEmptyState(),
-
-                    // Side panels
-                    if (_showAiAssistantPanel)
-                      Positioned(
-                        right: _showCustomizationPanel ? 350 : 0,
-                        top: 0,
-                        bottom: 0,
-                        width: 400,
-                        child: AiAssistantSidePanel(
-                          onClose: () =>
-                              setState(() => _showAiAssistantPanel = false),
-                          onExpand: () async {
-                            setState(() => _showAiAssistantPanel = false);
-                            final result = await Navigator.of(context).push<bool>(
-                              MaterialPageRoute(
-                                  builder: (_) => const AcronousChatPage()),
-                            );
-                            if (result == true && mounted) {
-                              setState(() => _showAiAssistantPanel = true);
-                            }
-                          },
-                        ),
-                      ),
-                    if (_showCustomizationPanel)
-                      Positioned(
-                        right: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: 350,
-                        child: CustomizationPanel(
-                          onClose: () =>
-                              setState(() => _showCustomizationPanel = false),
-                        ),
-                      ),
-                  ],
-                ),
+                child: browserService.activeTab != null
+                    ? _buildWebView(browserService)
+                    : _buildEmptyState(),
               ),
             ],
           );
@@ -213,16 +153,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   Widget _buildWebView(BrowserService browserService) {
     final activeUrl = browserService.activeTab?.url;
-    if (DomainHelper.isNavigwizSearchUrl(activeUrl)) {
-      final query = DomainHelper.searchQueryFromUrl(activeUrl);
-      return query.isEmpty
-          ? _buildEmptyState()
-          : NavigwizSearchResults(
-              key: ValueKey('$activeUrl-${browserService.reloadNonce}'),
-              query: query,
-            );
-    }
-
     if (DomainHelper.isNavigwizDomain(activeUrl)) {
       return _buildEmptyState();
     }
@@ -254,8 +184,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 image: MemoryImage(themeService.backgroundImageBytes!),
                 fit: BoxFit.cover,
                 colorFilter: ColorFilter.mode(
-                  Colors.black
-                      .withValues(alpha: themeService.isDarkMode ? 0.55 : 0.28),
+                  Colors.black.withValues(alpha: themeService.isDarkMode ? 0.55 : 0.28),
                   BlendMode.darken,
                 ),
               )
@@ -271,58 +200,40 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 _buildLiveWallpaperHint(themeService),
                 const SizedBox(height: 22),
               ],
-
-              // Large Saturn logo
-              const SaturnLogo(size: 132, showGlow: true),
-              const SizedBox(height: 28),
-
-              // App name
+              const SaturnLogo(size: 100, showGlow: true),
+              const SizedBox(height: 20),
               Text(
                 'Navigwiz',
                 style: TextStyle(
-                  fontSize: 46,
+                  fontSize: 38,
                   fontWeight: FontWeight.bold,
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
               ),
-              const SizedBox(height: 8),
-
-              // Tagline
+              const SizedBox(height: 6),
               Text(
-                kIsWeb
-                    ? 'Search the internet with Navigwiz results'
-                    : 'Search the internet and browse without leaving the app',
+                'AI-Powered Internet Operating System',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 18,
+                  fontSize: 16,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 34),
-
-              // Search box
+              const SizedBox(height: 28),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 720),
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surface
-                        .withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(10),
+                    color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color:
-                          Theme.of(context).dividerColor.withValues(alpha: 0.3),
+                      color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .shadow
-                            .withValues(alpha: 0.18),
+                        color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.18),
                         blurRadius: 22,
                         offset: const Offset(0, 10),
                       ),
@@ -330,10 +241,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.search,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                      Icon(Icons.search, color: Theme.of(context).colorScheme.onSurfaceVariant),
                       const SizedBox(width: 16),
                       Expanded(
                         child: TextField(
@@ -346,11 +254,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
                             color: Theme.of(context).colorScheme.onSurface,
                           ),
                           decoration: InputDecoration(
-                            hintText: 'Search or enter URL',
+                            hintText: 'What do you want to do?',
                             hintStyle: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
                             ),
                             border: InputBorder.none,
                           ),
@@ -358,15 +264,14 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       ),
                       IconButton(
                         tooltip: 'Search',
-                        onPressed: () =>
-                            _submitHomeSearch(_homeSearchController.text),
+                        onPressed: () => _submitHomeSearch(_homeSearchController.text),
                         icon: const Icon(Icons.arrow_forward),
                       ),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -404,7 +309,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
     Provider.of<BrowserService>(context, listen: false).navigateToUrl(query);
   }
 
-  Widget _buildTitleBar(ThemeService themeService) {
+  Widget _buildTitleBar() {
     return Container(
       height: 32,
       decoration: BoxDecoration(
@@ -430,7 +335,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
             ),
           ),
           const Spacer(),
-          // Window controls (desktop style)
           if (!kIsWeb) ...[
             _buildWindowControl(Icons.remove, Colors.grey[600]!),
             _buildWindowControl(Icons.crop_square, Colors.grey[600]!),
@@ -451,66 +355,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
         color: color,
         shape: BoxShape.circle,
       ),
-      child: Icon(
-        icon,
-        size: 8,
-        color: Colors.white,
-      ),
-    );
-  }
-
-  Widget _buildAcronousButton() {
-    return Tooltip(
-      message: 'Acronous AI',
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: _showAiAssistantPanel
-              ? Theme.of(context).colorScheme.primaryContainer
-              : Theme.of(context).colorScheme.surfaceContainer,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: IconButton(
-          onPressed: () => setState(() => _showAiAssistantPanel = !_showAiAssistantPanel),
-          icon: const AcronousLogo(size: 16, showGlow: true),
-          padding: EdgeInsets.zero,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToolbarButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-    bool isActive = false,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: isActive
-              ? Theme.of(context).colorScheme.primaryContainer
-              : Theme.of(context).colorScheme.surfaceContainer,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: IconButton(
-          onPressed: onPressed,
-          icon: Icon(
-            icon,
-            size: 16,
-            color: isActive
-                ? Theme.of(context).colorScheme.onPrimaryContainer
-                : Theme.of(context).colorScheme.onSurface,
-          ),
-          padding: EdgeInsets.zero,
-        ),
-      ),
+      child: Icon(icon, size: 8, color: Colors.white),
     );
   }
 }
-
-

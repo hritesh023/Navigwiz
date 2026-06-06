@@ -108,7 +108,7 @@ class AIService extends ChangeNotifier {
   final Map<String, _CachedSearchResults> _searchCache = {};
   final Map<String, _CachedFullResponse> _fullSearchCache = {};
 
-  final bool _isLoading = false;
+  bool _isLoading = false;
 
   bool get isLoading => _isLoading;
 
@@ -537,16 +537,22 @@ class AIService extends ChangeNotifier {
     return _fallbackResults(query, category: 'images');
   }
 
+  Future<String> askAi(String input, {String? extraInstructions}) async {
+    return _askAi(input, extraInstructions: extraInstructions);
+  }
+
   Future<String> _askAi(String input, {String? extraInstructions}) async {
-    if (_secureStorage.isRateLimited('ai')) {
-      return 'Too many requests. Please wait a moment.';
-    }
-
-    final apiUrl = AppConfig.hasWorker
-        ? '${AppConfig.workerUrl}/v1/chat'
-        : 'https://acronous.com/v1/chat';
-
+    _isLoading = true;
+    notifyListeners();
     try {
+      if (_secureStorage.isRateLimited('ai')) {
+        return 'Too many requests. Please wait a moment.';
+      }
+
+      final apiUrl = AppConfig.hasWorker
+          ? '${AppConfig.workerUrl}/v1/chat'
+          : 'https://acronous.com/v1/chat';
+
       final response = await http.post(
         Uri.parse(apiUrl),
         headers: {'Content-Type': 'application/json'},
@@ -561,8 +567,10 @@ class AIService extends ChangeNotifier {
         final text = decoded['response']?.toString() ?? '';
         if (text.isNotEmpty) return text;
       }
-    } catch (_) {}
-
-    return '';
+      return '';
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 }
