@@ -10,7 +10,7 @@ import 'services/theme_service.dart';
 import 'services/logging_service.dart';
 import 'services/analytics_service.dart';
 import 'services/update_service.dart';
-import 'services/supabase_service.dart';
+import 'services/central_auth_service.dart';
 import 'providers/chat_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/workspace_provider.dart';
@@ -21,17 +21,36 @@ import 'providers/project_provider.dart';
 import 'providers/settings_provider.dart';
 import 'config/app_config.dart';
 
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    if (auth.isSignedIn) {
+      return const BrowserScreen();
+    }
+    // Redirect to centralized auth on first build if not signed in
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!auth.isSignedIn) {
+        auth.redirectToLogin();
+      }
+    });
+    return const LoginScreen();
+  }
+}
+
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final supabaseService = SupabaseService();
+  final authService = CentralAuthService();
   final themeService = ThemeService();
   final browserService = BrowserService();
   final aiService = AIService();
   final chatProvider = ChatProvider();
-  final authProvider = AuthProvider(supabase: supabaseService);
+  final authProvider = AuthProvider(auth: authService);
   final workspaceProvider = WorkspaceProvider();
   final researchProvider = ResearchProvider(aiService: aiService);
   final memoryProvider = MemoryProvider();
@@ -41,7 +60,7 @@ void main(List<String> args) async {
 
   await logger.initialize();
   await themeService.initialize();
-  await supabaseService.initialize();
+  await authProvider.initialize();
   await workspaceProvider.initialize();
   await researchProvider.initialize();
   await memoryProvider.initialize();
@@ -149,7 +168,7 @@ class NavigwizApp extends StatelessWidget {
             debugShowCheckedModeBanner: false,
             initialRoute: '/',
             routes: {
-              '/': (context) => const BrowserScreen(),
+              '/': (context) => const AuthGate(),
               '/login': (context) => const LoginScreen(),
               '/home': (context) => const BrowserScreen(),
             },

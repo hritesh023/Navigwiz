@@ -11,12 +11,11 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStateMixin {
-  bool _isSignUp = false;
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _nameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _obscurePassword = true;
+  bool _isSignUp = false;
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
 
@@ -33,7 +32,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       if (auth.isSignedIn) {
-      Navigator.of(context).pushReplacementNamed('/');
+        Navigator.of(context).pushReplacementNamed('/');
       }
     });
   }
@@ -42,7 +41,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _nameController.dispose();
     _animController.dispose();
     super.dispose();
   }
@@ -52,14 +50,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
 
     final auth = context.read<AuthProvider>();
     final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
+    final password = _passwordController.text;
 
-    bool success;
-    if (_isSignUp) {
-      success = await auth.signUp(email: email, password: password, displayName: _nameController.text.trim());
-    } else {
-      success = await auth.signIn(email: email, password: password);
-    }
+    final success = await auth.signIn(email: email, password: password);
 
     if (success && mounted) {
       Navigator.of(context).pushReplacementNamed('/home');
@@ -154,7 +147,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Text(
-                                _isSignUp ? 'Create Account' : 'Welcome Back',
+                                _isSignUp ? 'Create Account' : 'Sign In',
                                 style: TextStyle(
                                   fontSize: 22,
                                   fontWeight: FontWeight.w600,
@@ -163,37 +156,27 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                _isSignUp ? 'Sign up to start using Navigwiz' : 'Sign in to continue to Navigwiz',
+                                _isSignUp
+                                    ? 'Create your account to access all apps'
+                                    : 'Sign in to your Acronous account',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
                               ),
                               const SizedBox(height: 24),
-                              if (_isSignUp) ...[
-                                TextFormField(
-                                  controller: _nameController,
-                                  decoration: InputDecoration(
-                                    labelText: 'Display Name',
-                                    prefixIcon: const Icon(Icons.person_outline, size: 20),
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
-                                  textInputAction: TextInputAction.next,
-                                ),
-                                const SizedBox(height: 14),
-                              ],
                               TextFormField(
                                 controller: _emailController,
+                                keyboardType: TextInputType.emailAddress,
                                 decoration: InputDecoration(
                                   labelText: 'Email',
                                   prefixIcon: const Icon(Icons.email_outlined, size: 20),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
-                                keyboardType: TextInputType.emailAddress,
                                 textInputAction: TextInputAction.next,
                                 validator: (v) {
                                   if (v == null || v.trim().isEmpty) return 'Please enter your email';
-                                  if (!v.contains('@')) return 'Invalid email format';
+                                  if (!v.contains('@')) return 'Enter a valid email';
                                   return null;
                                 },
                               ),
@@ -251,29 +234,24 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                   );
                                 },
                               ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        TextButton(
-                          onPressed: () {
-                            setState(() => _isSignUp = !_isSignUp);
-                            context.read<AuthProvider>().clearError();
-                          },
-                          child: Text.rich(
-                            TextSpan(
-                              text: _isSignUp ? 'Already have an account? ' : "Don't have an account? ",
-                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-                              children: [
-                                TextSpan(
-                                  text: _isSignUp ? 'Sign In' : 'Sign Up',
+                              const SizedBox(height: 12),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _isSignUp = !_isSignUp;
+                                  });
+                                },
+                                child: Text(
+                                  _isSignUp
+                                      ? 'Already have an account? Sign In'
+                                      : "Don't have an account? Sign Up",
                                   style: TextStyle(
                                     color: theme.colorScheme.primary,
-                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
                                   ),
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ],

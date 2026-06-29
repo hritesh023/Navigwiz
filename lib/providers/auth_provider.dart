@@ -1,24 +1,23 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../services/supabase_service.dart';
+import '../services/central_auth_service.dart';
 
 class AuthProvider extends ChangeNotifier {
-  final SupabaseService _supabase;
+  final CentralAuthService _auth;
 
-  AuthProvider({SupabaseService? supabase}) : _supabase = supabase ?? SupabaseService();
+  AuthProvider({CentralAuthService? auth}) : _auth = auth ?? CentralAuthService();
 
   bool _isLoading = false;
   String? _error;
   bool get isLoading => _isLoading;
   String? get error => _error;
-  User? get currentUser => _supabase.currentUser;
-  bool get isSignedIn => _supabase.isSignedIn;
+  bool get isSignedIn => _auth.isSignedIn;
 
   Future<bool> initialize() async {
     try {
-      await _supabase.initialize();
+      await _auth.initialize();
+      final authenticated = await _auth.checkAuth();
       notifyListeners();
-      return true;
+      return authenticated;
     } catch (e) {
       debugPrint('Auth init error: $e');
       return false;
@@ -31,28 +30,13 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _supabase.signIn(email: email, password: password);
+      final success = await _auth.signIn(email, password);
       _isLoading = false;
+      if (!success) {
+        _error = 'Invalid email or password';
+      }
       notifyListeners();
-      return true;
-    } catch (e) {
-      _isLoading = false;
-      _error = e.toString();
-      notifyListeners();
-      return false;
-    }
-  }
-
-  Future<bool> signUp({required String email, required String password, String? displayName}) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      await _supabase.signUp(email: email, password: password, displayName: displayName);
-      _isLoading = false;
-      notifyListeners();
-      return true;
+      return success;
     } catch (e) {
       _isLoading = false;
       _error = e.toString();
@@ -62,8 +46,12 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
-    await _supabase.signOut();
+    await _auth.signOut();
     notifyListeners();
+  }
+
+  void redirectToLogin() {
+    _auth.redirectToLogin();
   }
 
   void clearError() {
