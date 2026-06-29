@@ -19,10 +19,6 @@ class Settings(BaseSettings):
     faiss_index_path: str = "./data/faiss"
     memory_store_path: str = "./data/memory"
 
-    redis_url: str = "redis://localhost:6379/0"
-    celery_broker_url: str = "redis://localhost:6379/1"
-    celery_result_backend: str = "redis://localhost:6379/2"
-
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     embedding_model: str = "all-MiniLM-L6-v2"

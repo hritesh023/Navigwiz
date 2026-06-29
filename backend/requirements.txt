@@ -52,11 +52,9 @@ openai-whisper==20240930
 TTS==0.22.0
 
 # Background Tasks
-celery==5.4.0
-redis==5.2.1
 apscheduler==3.11.0
 
-# Storage & Media
+storage & media
 cloudinary==1.41.0
 boto3==1.36.10
 

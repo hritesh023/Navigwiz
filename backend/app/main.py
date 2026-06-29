@@ -6,7 +6,8 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from app.config.settings import settings
-from app.api.routes import router
+from app.api.routes import router as api_router
+from app.api.cf_routes import router as cf_router
 
 
 @asynccontextmanager
@@ -20,9 +21,6 @@ async def lifespan(app: FastAPI):
     print("  Memory: ChromaDB + FAISS")
     print(f"  LLM: {settings.openai_model if settings.openai_api_key else 'Ollama'}")
     print(f"  Embeddings: {settings.embedding_model}")
-
-    from app.workers.celery_app import celery_app
-    print(f"  Celery: {celery_app.conf.broker_url}")
 
     yield
 
@@ -69,7 +67,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-app.include_router(router)
+app.include_router(api_router)
+app.include_router(cf_router)
 
 
 if __name__ == "__main__":

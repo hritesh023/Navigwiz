@@ -44,7 +44,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
       _initializeBrowser();
     } else {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final browserService = Provider.of<BrowserService>(context, listen: false);
+        final browserService =
+            Provider.of<BrowserService>(context, listen: false);
         if (browserService.tabs.isEmpty) {
           browserService.createNewTab();
         }
@@ -65,7 +66,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (int progress) {
-            final browserService = Provider.of<BrowserService>(context, listen: false);
+            final browserService =
+                Provider.of<BrowserService>(context, listen: false);
             final activeTab = browserService.activeTab;
             if (activeTab != null &&
                 (progress == 100 ||
@@ -79,7 +81,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             }
           },
           onPageStarted: (String url) {
-            final browserService = Provider.of<BrowserService>(context, listen: false);
+            final browserService =
+                Provider.of<BrowserService>(context, listen: false);
             if (browserService.activeTab != null) {
               browserService.updateTab(
                 browserService.activeTab!.id,
@@ -89,7 +92,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             }
           },
           onPageFinished: (String url) {
-            final browserService = Provider.of<BrowserService>(context, listen: false);
+            final browserService =
+                Provider.of<BrowserService>(context, listen: false);
             if (browserService.activeTab != null) {
               browserService.updateTab(
                 browserService.activeTab!.id,
@@ -105,13 +109,15 @@ class _BrowserScreenState extends State<BrowserScreen> {
             );
           },
           onWebResourceError: (WebResourceError error) {
-            debugPrint('WebView error: ${error.description} (code: ${error.errorCode})');
+            debugPrint(
+                'WebView error: ${error.description} (code: ${error.errorCode})');
           },
         ),
       );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final browserService = Provider.of<BrowserService>(context, listen: false);
+      final browserService =
+          Provider.of<BrowserService>(context, listen: false);
       if (_webViewController != null) {
         browserService.setWebViewController(_webViewController!);
       }
@@ -150,7 +156,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
               onReloadPressed: () => browserService.reload(),
               canGoBack: browserService.canGoBack,
               canGoForward: browserService.canGoForward,
-              trailingActions: [
+              trailingActions: <Widget>[
                 _buildToolbarButton(
                   icon: Icons.travel_explore,
                   tooltip: 'Research Mode',
@@ -164,7 +170,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   icon: Icons.workspaces_outline,
                   tooltip: 'Workspaces',
                   isActive: _showWorkspacePanel,
-                  onPressed: () => setState(() => _showWorkspacePanel = !_showWorkspacePanel),
+                  onPressed: () => setState(
+                      () => _showWorkspacePanel = !_showWorkspacePanel),
                 ),
                 const SizedBox(width: 4),
                 _buildAcronousButton(),
@@ -173,7 +180,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   icon: _showCustomizationPanel ? Icons.close : Icons.palette,
                   tooltip: 'Customize',
                   isActive: _showCustomizationPanel,
-                  onPressed: () => setState(() => _showCustomizationPanel = !_showCustomizationPanel),
+                  onPressed: () => setState(
+                      () => _showCustomizationPanel = !_showCustomizationPanel),
                 ),
               ],
             ),
@@ -187,16 +195,22 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       : _buildEmptyState(),
                   if (_showAiAssistantPanel)
                     Positioned(
-                      right: _showCustomizationPanel ? 350 : _showWorkspacePanel ? 320 : 0,
+                      right: _showCustomizationPanel
+                          ? 350
+                          : _showWorkspacePanel
+                              ? 320
+                              : 0,
                       top: 0,
                       bottom: 0,
                       width: 400,
                       child: AiAssistantSidePanel(
-                        onClose: () => setState(() => _showAiAssistantPanel = false),
+                        onClose: () =>
+                            setState(() => _showAiAssistantPanel = false),
                         onExpand: () async {
                           setState(() => _showAiAssistantPanel = false);
                           final result = await Navigator.of(context).push<bool>(
-                            MaterialPageRoute(builder: (_) => const AcronousChatPage()),
+                            MaterialPageRoute(
+                                builder: (_) => const AcronousChatPage()),
                           );
                           if (result == true && mounted) {
                             setState(() => _showAiAssistantPanel = true);
@@ -219,7 +233,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       bottom: 0,
                       width: 350,
                       child: CustomizationPanel(
-                        onClose: () => setState(() => _showCustomizationPanel = false),
+                        onClose: () =>
+                            setState(() => _showCustomizationPanel = false),
                       ),
                     ),
                 ],
@@ -274,7 +289,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 image: MemoryImage(themeService.backgroundImageBytes!),
                 fit: BoxFit.cover,
                 colorFilter: ColorFilter.mode(
-                  Colors.black.withValues(alpha: themeService.isDarkMode ? 0.55 : 0.28),
+                  Colors.black
+                      .withValues(alpha: themeService.isDarkMode ? 0.55 : 0.28),
                   BlendMode.darken,
                 ),
               )
@@ -314,16 +330,24 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 constraints: const BoxConstraints(maxWidth: 720),
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surface
+                        .withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+                      color:
+                          Theme.of(context).dividerColor.withValues(alpha: 0.3),
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.18),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .shadow
+                            .withValues(alpha: 0.18),
                         blurRadius: 22,
                         offset: const Offset(0, 10),
                       ),
@@ -331,7 +355,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.search, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      Icon(Icons.search,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
                       const SizedBox(width: 16),
                       Expanded(
                         child: TextField(
@@ -346,7 +372,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
                           decoration: InputDecoration(
                             hintText: 'What do you want to do?',
                             hintStyle: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
                             ),
                             border: InputBorder.none,
                           ),
@@ -354,7 +382,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       ),
                       IconButton(
                         tooltip: 'Search',
-                        onPressed: () => _submitHomeSearch(_homeSearchController.text),
+                        onPressed: () =>
+                            _submitHomeSearch(_homeSearchController.text),
                         icon: const Icon(Icons.arrow_forward),
                       ),
                     ],
@@ -379,10 +408,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
       alignment: WrapAlignment.center,
       children: [
         _buildQuickAction(Icons.travel_explore, 'Research', () {
-          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ResearchScreen()));
+          Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => const ResearchScreen()));
         }, theme),
         _buildQuickAction(Icons.workspaces_outline, 'Workspaces', () {
-          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
+          Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
         }, theme),
         _buildQuickAction(Icons.auto_awesome, 'AI Chat', () {
           setState(() => _showAiAssistantPanel = !_showAiAssistantPanel);
@@ -391,10 +422,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
     );
   }
 
-  Widget _buildQuickAction(IconData icon, String label, VoidCallback onTap, ThemeData theme) {
+  Widget _buildQuickAction(
+      IconData icon, String label, VoidCallback onTap, ThemeData theme) {
     return ActionChip(
       avatar: Icon(icon, size: 16, color: theme.colorScheme.primary),
-      label: Text(label, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface)),
+      label: Text(label,
+          style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface)),
       onPressed: onTap,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
     );
@@ -457,15 +490,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
           ),
           const SizedBox(width: 12),
           _buildTitleButton(Icons.home_outlined, 'Home', () {
-            Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const BrowserScreen()));
+            Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const BrowserScreen()));
           }),
           const SizedBox(width: 4),
           _buildTitleButton(Icons.travel_explore, 'Research', () {
-            Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ResearchScreen()));
+            Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ResearchScreen()));
           }),
           const SizedBox(width: 4),
           _buildTitleButton(Icons.workspaces_outline, 'Workspaces', () {
-            Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
+            Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
           }),
           const Spacer(),
           if (!kIsWeb) ...[
@@ -495,7 +531,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
               const SizedBox(width: 4),
               Text(
                 label,
-                style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
+                style: TextStyle(
+                    fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
               ),
             ],
           ),
@@ -530,7 +567,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
           borderRadius: BorderRadius.circular(8),
         ),
         child: IconButton(
-          onPressed: () => setState(() => _showAiAssistantPanel = !_showAiAssistantPanel),
+          onPressed: () =>
+              setState(() => _showAiAssistantPanel = !_showAiAssistantPanel),
           icon: const AcronousLogo(size: 16, showGlow: true),
           padding: EdgeInsets.zero,
         ),
@@ -586,11 +624,17 @@ class _BrowserScreenState extends State<BrowserScreen> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: theme.dividerColor.withValues(alpha: 0.2))),
+              border: Border(
+                  bottom: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.2))),
             ),
             child: Row(
               children: [
-                Text('Workspaces', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: theme.colorScheme.onSurface)),
+                Text('Workspaces',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: theme.colorScheme.onSurface)),
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.close, size: 18),
@@ -603,26 +647,36 @@ class _BrowserScreenState extends State<BrowserScreen> {
           ),
           Expanded(
             child: workspaceProvider.workspaces.isEmpty
-              ? Center(
-                  child: Text('No workspaces', style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(8),
-                  itemCount: workspaceProvider.workspaces.length,
-                  itemBuilder: (ctx, i) {
-                    final ws = workspaceProvider.workspaces[i];
-                    return ListTile(
-                      dense: true,
-                      leading: Icon(Icons.folder_outlined, size: 18, color: theme.colorScheme.primary),
-                      title: Text(ws.name, style: TextStyle(fontSize: 13, color: theme.colorScheme.onSurface)),
-                      subtitle: Text('${ws.items.length} items', style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurfaceVariant)),
-                      onTap: () {
-                        workspaceProvider.setActiveWorkspace(ws.id);
-                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
-                      },
-                    );
-                  },
-                ),
+                ? Center(
+                    child: Text('No workspaces',
+                        style: TextStyle(
+                            color: theme.colorScheme.onSurfaceVariant)),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(8),
+                    itemCount: workspaceProvider.workspaces.length,
+                    itemBuilder: (ctx, i) {
+                      final ws = workspaceProvider.workspaces[i];
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(Icons.folder_outlined,
+                            size: 18, color: theme.colorScheme.primary),
+                        title: Text(ws.name,
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.onSurface)),
+                        subtitle: Text('${ws.items.length} items',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: theme.colorScheme.onSurfaceVariant)),
+                        onTap: () {
+                          workspaceProvider.setActiveWorkspace(ws.id);
+                          Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const WorkspaceScreen()));
+                        },
+                      );
+                    },
+                  ),
           ),
         ],
       ),
