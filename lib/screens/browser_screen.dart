@@ -182,11 +182,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   icon: Icons.logout,
                   tooltip: 'Sign Out',
                   isActive: false,
-                  onPressed: () async {
+                  onPressed: () {
                     final auth = Provider.of<AuthProvider>(context, listen: false);
-                    await auth.signOut();
-                    if (!context.mounted) return;
-                    Navigator.of(context).pushReplacementNamed('/login');
+                    auth.redirectToLogout();
                   },
                 ),
                 const SizedBox(width: 4),
@@ -429,10 +427,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 builder: (context, auth, _) {
                   if (!auth.isSignedIn) return const SizedBox.shrink();
                   return OutlinedButton.icon(
-                    onPressed: () async {
-                      await auth.signOut();
-                      if (!context.mounted) return;
-                      Navigator.of(context).pushReplacementNamed('/login');
+                    onPressed: () {
+                      auth.redirectToLogout();
                     },
                     icon: const Icon(Icons.logout, size: 16),
                     label: const Text('Sign Out', style: TextStyle(fontSize: 13)),
@@ -559,10 +555,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
           Consumer<AuthProvider>(
             builder: (context, auth, _) {
               if (!auth.isSignedIn) return const SizedBox.shrink();
-              return _buildTitleButton(Icons.logout, 'Sign Out', () async {
-                await auth.signOut();
-                if (!context.mounted) return;
-                Navigator.of(context).pushReplacementNamed('/login');
+              return _buildTitleButton(Icons.logout, 'Sign Out', () {
+                auth.redirectToLogout();
               });
             },
           ),

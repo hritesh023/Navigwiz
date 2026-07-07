@@ -77,6 +77,10 @@ class AuthProvider extends ChangeNotifier {
     _auth.redirectToLogin();
   }
 
+  void redirectToLogout() {
+    _auth.redirectToLogout();
+  }
+
   void clearError() {
     _error = null;
     notifyListeners();

@@ -167,7 +167,7 @@ class CentralAuthService {
   }
 
   void redirectToLogout() {
-    web.window.location.href = '$_authUrl/login';
+    web.window.location.href = '$_authUrl/logout';
   }
 
   void redirectToLogin() {
