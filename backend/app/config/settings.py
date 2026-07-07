@@ -7,11 +7,10 @@ class Settings(BaseSettings):
     app_version: str = "2.0.0"
     debug: bool = False
 
-    supabase_url: str = ""
-    supabase_anon_key: str = ""
-    supabase_service_key: str = ""
+    application_tag_key: str = "awsApplication"
+    application_tag_value: str = "arn:aws:resource-groups:eu-north-1:365528424228:group/Navigwiz/0dt1ixunjvtfz4wt3f1boy399o"
 
-    jwt_secret: str = "navigwiz-jwt-secret-change-in-production"  # WARNING: change this in production!
+    jwt_secret: str = "navigwiz-jwt-secret-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 72
 

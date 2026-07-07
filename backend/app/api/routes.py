@@ -8,7 +8,7 @@ from app.models.schemas import (
     ChatRequest, ChatResponse, MemorySearchRequest, MemoryEntry,
     KnowledgeNode, KnowledgeEdge, Workspace, SearchRequest, AnalysisRequest, SynthesisRequest
 )
-from app.core.auth import verify_token, create_access_token
+from app.core.auth import verify_token, create_access_token, validate_application_tags
 from app.core.llm import llm_service
 from app.core.memory import semantic_memory, knowledge_graph
 from app.core.workflows import create_research_workflow, create_analysis_workflow
@@ -34,46 +34,20 @@ async def health():
     }
 
 
-@router.post("/auth/signup")
-async def sign_up(email: str = Form(...), password: str = Form(...), display_name: str = Form("")):
-    from app.config.database import get_supabase_service
-    supabase = get_supabase_service()
-    try:
-        result = supabase.auth.sign_up({"email": email, "password": password})
-        if result.user:
-            supabase.table("profiles").insert({
-                "id": result.user.id,
-                "email": email,
-                "display_name": display_name or email.split("@")[0]
-            }).execute()
-            token = create_access_token(result.user.id, email)
-            return {"user": {"id": result.user.id, "email": email}, "token": token}
-        return {"error": "Sign up failed"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 @router.post("/auth/signin")
-async def sign_in(email: str = Form(...), password: str = Form(...)):
-    from app.config.database import supabase
-    try:
-        result = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        if result.user:
-            token = create_access_token(result.user.id, email)
-            return {
-                "user": {"id": result.user.id, "email": email},
-                "token": token,
-                "refresh_token": result.session.refresh_token if hasattr(result.session, 'refresh_token') else None
-            }
-        return {"error": "Invalid credentials"}
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+async def sign_in(tag_key: str = Form(...), tag_value: str = Form(...)):
+    user = validate_application_tags(tag_key, tag_value)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid application credentials")
+    token = create_access_token(tag_key, tag_value)
+    return {
+        "user": user,
+        "token": token,
+    }
 
 
 @router.post("/auth/signout")
 async def sign_out(user: dict = Depends(verify_token)):
-    from app.config.database import supabase
-    supabase.auth.sign_out()
     return {"status": "signed_out"}
 
 
@@ -286,32 +260,34 @@ async def browser_screenshot(url: str = Form(...)):
 async def create_workspace(workspace: Workspace, user: dict = Depends(verify_token)):
     workspace.user_id = user["id"]
     workspace.id = str(uuid.uuid4())
-    from app.config.database import supabase
+    from app.config.database import create_workspace as db_create
     data = workspace.model_dump()
-    supabase.table("workspaces").insert(data).execute()
+    db_create(data)
     return {"id": workspace.id, "status": "created"}
 
 
 @router.get("/workspace")
 async def get_workspaces(user: dict = Depends(verify_token)):
-    from app.config.database import supabase
-    result = supabase.table("workspaces").select("*").eq("user_id", user["id"]).execute()
-    return {"workspaces": result.data}
+    from app.config.database import get_workspaces as db_get_workspaces
+    result = db_get_workspaces(user["id"])
+    return {"workspaces": result}
 
 
 @router.get("/workspace/{workspace_id}")
 async def get_workspace(workspace_id: str, user: dict = Depends(verify_token)):
-    from app.config.database import supabase
-    result = supabase.table("workspaces").select("*").eq("id", workspace_id).eq("user_id", user["id"]).single().execute()
-    if not result.data:
+    from app.config.database import get_workspace as db_get_workspace
+    result = db_get_workspace(workspace_id, user["id"])
+    if not result:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    return result.data
+    return result
 
 
 @router.delete("/workspace/{workspace_id}")
 async def delete_workspace(workspace_id: str, user: dict = Depends(verify_token)):
-    from app.config.database import supabase
-    supabase.table("workspaces").delete().eq("id", workspace_id).eq("user_id", user["id"]).execute()
+    from app.config.database import delete_workspace as db_delete
+    deleted = db_delete(workspace_id, user["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Workspace not found")
     return {"status": "deleted"}
 
 
@@ -336,9 +312,30 @@ async def analyze_image(file: UploadFile = File(...), prompt: str = Form("Descri
 @router.post("/image/generate")
 async def generate_image(prompt: str = Form(...), style: str = Form("natural"), size: str = Form("1024x1024")):
     width, height = map(int, size.split("x"))
+    import base64
+    import urllib.parse
+    import httpx
+
+    # Try generating using Pollinations AI
+    try:
+        encoded_prompt = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&model=flux&nologo=true"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, timeout=45.0)
+            if resp.status_code == 200:
+                img_b64 = base64.b64encode(resp.content).decode("utf-8")
+                return {
+                    "image": f"data:image/png;base64,{img_b64}",
+                    "prompt": prompt,
+                    "size": size,
+                    "format": "png"
+                }
+    except Exception as e:
+        print(f"Pollinations generation failed: {e}. Falling back to text placeholder.")
+
+    # Fallback to local image drawing if Pollinations fails
     from PIL import Image as PILImage, ImageDraw, ImageFont
     import io
-    import base64
 
     img = PILImage.new("RGB", (width, height), color=(20, 20, 30))
     draw = ImageDraw.Draw(img)

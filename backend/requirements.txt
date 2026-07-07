@@ -9,7 +9,6 @@ websockets==14.1
 # Authentication
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-supabase==2.9.0
 
 # Memory & Vector Search
 chromadb==0.6.3
@@ -54,7 +53,7 @@ TTS==0.22.0
 # Background Tasks
 apscheduler==3.11.0
 
-storage & media
+# storage & media
 cloudinary==1.41.0
 boto3==1.36.10
 

@@ -331,29 +331,28 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                'AI-Powered Internet Operating System',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
               Consumer<AuthProvider>(
                 builder: (context, auth, _) {
-                  final name = auth.userName;
-                  if (name == null || name.isEmpty) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      'Welcome, $name',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: Theme.of(context).colorScheme.onSurface,
+                  if (auth.isSignedIn && auth.userName != null && auth.userName!.isNotEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        'Welcome, ${auth.userName}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w500,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
                       ),
+                    );
+                  }
+                  return Text(
+                    'AI-Powered Internet Operating System',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   );
                 },
@@ -556,13 +555,17 @@ class _BrowserScreenState extends State<BrowserScreen> {
             Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
           }),
-          _buildTitleButton(Icons.logout, 'Sign Out', () async {
-            final auth = Provider.of<AuthProvider>(context, listen: false);
-            await auth.signOut();
-            if (!context.mounted) return;
-            Navigator.of(context).pushReplacementNamed('/login');
-          }),
           const Spacer(),
+          Consumer<AuthProvider>(
+            builder: (context, auth, _) {
+              if (!auth.isSignedIn) return const SizedBox.shrink();
+              return _buildTitleButton(Icons.logout, 'Sign Out', () async {
+                await auth.signOut();
+                if (!context.mounted) return;
+                Navigator.of(context).pushReplacementNamed('/login');
+              });
+            },
+          ),
           if (!kIsWeb) ...[
             _buildWindowControl(Icons.remove, Colors.grey[600]!),
             _buildWindowControl(Icons.crop_square, Colors.grey[600]!),

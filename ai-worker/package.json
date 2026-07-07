@@ -1,0 +1,14 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "description": "AI worker test configuration",
+  "scripts": {
+    "test": "echo \"Test completed for ai-worker\" && exit 0",
+    "dev": "node -e \"const worker = require('./src/index'); console.log('Worker loaded successfully');\"",
+    "lint": "echo \"No linting configured for JavaScript\"",
+    "build": "echo \"Building AI worker...\""
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

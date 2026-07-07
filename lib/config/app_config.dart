@@ -35,4 +35,8 @@ class AppConfig {
 
   // Environment Detection
   static bool get isWeb => kIsWeb;
+
+  // Application Tags
+  static const String applicationTagKey = 'awsApplication';
+  static const String applicationTagValue = 'arn:aws:resource-groups:eu-north-1:365528424228:group/Navigwiz/0dt1ixunjvtfz4wt3f1boy399o';
 }

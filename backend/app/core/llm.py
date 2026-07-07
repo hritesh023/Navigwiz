@@ -46,6 +46,18 @@ class LLMService:
         response = await self.llm.ainvoke(langchain_messages)
         return response.content
 
+    async def aiFast(self, prompt, system_prompt: Optional[str] = None) -> str:
+        if system_prompt is None:
+            system_prompt = "You are a helpful AI assistant. Provide concise, accurate answers. For simple questions, give brief and direct responses. For complex queries, provide more detailed explanations. Be factual and helpful."
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+        return await self.chat(messages)
+
+    async def aiSmart(self, prompt, system_prompt: Optional[str] = None) -> str:
+        if system_prompt is None:
+            system_prompt = "You are an advanced AI assistant specializing in complex problem-solving. Analyze requirements thoroughly, consider multiple approaches, and provide comprehensive detailed answers with step-by-step reasoning. Use external resources when needed for accuracy."
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+        return await self.chat(messages)
+
     async def chat_with_context(self, messages: list[dict], context: str) -> str:
         system_prompt = f"""You are Navigwiz, an AI-native digital companion.
 You understand the user's goals, habits, projects, and digital life.
