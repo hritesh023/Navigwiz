@@ -73,7 +73,7 @@ function setCookie(token, hostname) {
 
 function clearCookie(hostname) {
   const domain = hostname?.endsWith('acronous.com') ? 'Domain=.acronous.com; ' : '';
-  return `${TOKEN_NAME}=; ${domain}Path=/; Max-Age=0`;
+  return `${TOKEN_NAME}=; ${domain}Path=/; Max-Age=0; SameSite=Lax; Secure`;
 }
 
 function getTokenFromReq(req) {
