@@ -158,7 +158,7 @@ async function handleAuthRequest(request, url, env) {
   const path = url.pathname;
   const method = request.method;
   const origin = request.headers.get('Origin') || 'https://navigwiz.acronous.com';
-  const hostname = url.hostname;
+  const hostname = request.headers.get('X-Forwarded-Host') || url.hostname;
   const jwtSecret = env.JWT_SECRET;
 
   async function doLogin(email, password) {
@@ -359,9 +359,10 @@ export default {
       const decoded = await verifyJWT(urlToken, env.JWT_SECRET);
       if (decoded) {
         url.searchParams.delete('token');
-        const cleanPath = url.pathname + url.search + url.hash;
-        const res = redirectResponse(cleanPath);
-        res.headers.append('Set-Cookie', setCookie(urlToken, url.hostname));
+        const originalHost = request.headers.get('X-Forwarded-Host') || url.hostname;
+        const cleanUrl = url.protocol + '//' + originalHost + url.pathname + url.search + url.hash;
+        const res = redirectResponse(cleanUrl);
+        res.headers.append('Set-Cookie', setCookie(urlToken, originalHost));
         return res;
       }
     }
