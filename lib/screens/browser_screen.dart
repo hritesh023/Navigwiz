@@ -179,6 +179,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 _buildAcronousButton(),
                 const SizedBox(width: 4),
                 _buildToolbarButton(
+                  icon: Icons.logout,
+                  tooltip: 'Sign Out',
+                  isActive: false,
+                  onPressed: () async {
+                    final auth = Provider.of<AuthProvider>(context, listen: false);
+                    await auth.signOut();
+                    if (!context.mounted) return;
+                    Navigator.of(context).pushReplacementNamed('/login');
+                  },
+                ),
+                const SizedBox(width: 4),
+                _buildToolbarButton(
                   icon: _showCustomizationPanel ? Icons.close : Icons.palette,
                   tooltip: 'Customize',
                   isActive: _showCustomizationPanel,
@@ -509,11 +521,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
             final auth = Provider.of<AuthProvider>(context, listen: false);
             await auth.signOut();
             if (!context.mounted) return;
-            if (kIsWeb) {
-              CentralAuthService().redirectToLogout();
-            } else {
-              Navigator.of(context).pushReplacementNamed('/');
-            }
+            Navigator.of(context).pushReplacementNamed('/login');
           }),
           const Spacer(),
           if (!kIsWeb) ...[
