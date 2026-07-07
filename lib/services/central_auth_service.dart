@@ -23,15 +23,9 @@ class CentralAuthService {
   String? get userId => _userId;
   String? get userName => _userName;
 
-  String get _authUrl {
-    // Use the Navigwiz auth worker origin on web so auth requests go through
-    // the Cloudflare Worker at navigwiz.acronous.com (which handles /api/auth/*)
-    try {
-      final origin = web.window.location.origin;
-      if (origin.isNotEmpty) return origin;
-    } catch (_) {}
-    return 'https://navigwiz.acronous.com';
-  }
+  static const String _authBaseUrl = 'https://navigwiz.acronous.com';
+
+  String get _authUrl => _authBaseUrl;
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();

@@ -339,7 +339,26 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 12),
+              Consumer<AuthProvider>(
+                builder: (context, auth, _) {
+                  final name = auth.userName;
+                  if (name == null || name.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      'Welcome, $name',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 720),
                 child: Container(

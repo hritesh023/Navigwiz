@@ -13,6 +13,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStateMixin {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _nameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _obscurePassword = true;
   bool _isSignUp = false;
@@ -41,6 +42,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _nameController.dispose();
     _animController.dispose();
     super.dispose();
   }
@@ -51,9 +53,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     final auth = context.read<AuthProvider>();
     final email = _emailController.text.trim();
     final password = _passwordController.text;
+    final name = _nameController.text.trim();
 
     final success = _isSignUp
-        ? await auth.signUp(email: email, password: password, name: email.split('@')[0])
+        ? await auth.signUp(email: email, password: password, name: name.isNotEmpty ? name : email.split('@')[0])
         : await auth.signIn(email: email, password: password);
 
     if (success && mounted) {
@@ -182,6 +185,18 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                   return null;
                                 },
                               ),
+                              if (_isSignUp) ...[
+                                const SizedBox(height: 14),
+                                TextFormField(
+                                  controller: _nameController,
+                                  decoration: InputDecoration(
+                                    labelText: 'Name',
+                                    prefixIcon: const Icon(Icons.person_outline, size: 20),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                  ),
+                                  textInputAction: TextInputAction.next,
+                                ),
+                              ],
                               const SizedBox(height: 14),
                               TextFormField(
                                 controller: _passwordController,
