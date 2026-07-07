@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'screens/browser_screen.dart';
+import 'screens/login_screen.dart';
 
 import 'services/browser_service.dart';
 import 'services/ai_service.dart';
@@ -180,6 +181,7 @@ class NavigwizApp extends StatelessWidget {
             routes: {
               '/': (context) => const AuthGate(),
               '/home': (context) => const BrowserScreen(),
+              '/login': (context) => const LoginScreen(),
             },
           );
         },

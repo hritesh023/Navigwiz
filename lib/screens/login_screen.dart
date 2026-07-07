@@ -52,7 +52,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     final email = _emailController.text.trim();
     final password = _passwordController.text;
 
-    final success = await auth.signIn(email: email, password: password);
+    final success = _isSignUp
+        ? await auth.signUp(email: email, password: password, name: email.split('@')[0])
+        : await auth.signIn(email: email, password: password);
 
     if (success && mounted) {
       Navigator.of(context).pushReplacementNamed('/home');

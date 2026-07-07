@@ -505,12 +505,16 @@ class _BrowserScreenState extends State<BrowserScreen> {
             Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
           }),
-          if (kIsWeb)
-            _buildTitleButton(Icons.logout, 'Sign Out', () async {
-              final auth = Provider.of<AuthProvider>(context, listen: false);
-              await auth.signOut();
+          _buildTitleButton(Icons.logout, 'Sign Out', () async {
+            final auth = Provider.of<AuthProvider>(context, listen: false);
+            await auth.signOut();
+            if (!context.mounted) return;
+            if (kIsWeb) {
               CentralAuthService().redirectToLogout();
-            }),
+            } else {
+              Navigator.of(context).pushReplacementNamed('/');
+            }
+          }),
           const Spacer(),
           if (!kIsWeb) ...[
             _buildWindowControl(Icons.remove, Colors.grey[600]!),

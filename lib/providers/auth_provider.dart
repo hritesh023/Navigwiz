@@ -45,6 +45,27 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  Future<bool> signUp({required String email, required String password, String? name}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final success = await _auth.signUp(email, password, name: name);
+      _isLoading = false;
+      if (!success) {
+        _error = 'Sign up failed';
+      }
+      notifyListeners();
+      return success;
+    } catch (e) {
+      _isLoading = false;
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> signOut() async {
     await _auth.signOut();
     notifyListeners();
