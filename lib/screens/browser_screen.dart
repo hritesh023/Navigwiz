@@ -179,16 +179,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 _buildAcronousButton(),
                 const SizedBox(width: 4),
                 _buildToolbarButton(
-                  icon: Icons.logout,
-                  tooltip: 'Sign Out',
-                  isActive: false,
-                  onPressed: () {
-                    final auth = Provider.of<AuthProvider>(context, listen: false);
-                    auth.redirectToLogout();
-                  },
-                ),
-                const SizedBox(width: 4),
-                _buildToolbarButton(
                   icon: _showCustomizationPanel ? Icons.close : Icons.palette,
                   tooltip: 'Customize',
                   isActive: _showCustomizationPanel,
@@ -422,24 +412,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
               ),
               const SizedBox(height: 20),
               _buildQuickAccessButtons(),
-              const SizedBox(height: 20),
-              Consumer<AuthProvider>(
-                builder: (context, auth, _) {
-                  if (!auth.isSignedIn) return const SizedBox.shrink();
-                  return OutlinedButton.icon(
-                    onPressed: () {
-                      auth.redirectToLogout();
-                    },
-                    icon: const Icon(Icons.logout, size: 16),
-                    label: const Text('Sign Out', style: TextStyle(fontSize: 13)),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.4)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    ),
-                  );
-                },
-              ),
               const SizedBox(height: 24),
             ],
           ),
