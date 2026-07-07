@@ -161,39 +161,52 @@ async function handleAuthRequest(request, url, env) {
   const hostname = url.hostname;
   const jwtSecret = env.JWT_SECRET;
 
-  if (path === '/api/auth/signup' && method === 'POST') {
-    try {
-      const { email, password, name } = await request.json();
-      if (!email || !password) return corsResponse({ error: 'Email and password are required' }, 400, origin);
-      if (password.length < 6) return corsResponse({ error: 'Password must be at least 6 characters' }, 400, origin);
-      if (await getUser(email, env)) return corsResponse({ error: 'An account with this email already exists' }, 409, origin);
-      const salt = crypto.randomUUID();
-      const hashed = await hashPw(password, salt);
-      const user = { id: crypto.randomUUID(), email: email.toLowerCase(), name: name || email.split('@')[0], salt, password: hashed, createdAt: new Date().toISOString() };
-      await saveUser(user, env);
-      const token = await createJWT({ id: user.id, email: user.email, name: user.name }, jwtSecret);
-      const res = corsResponse({ success: true, token, user: { id: user.id, email: user.email, name: user.name } }, 200, origin);
-      res.headers.append('Set-Cookie', setCookie(token, hostname));
-      return res;
-    } catch { return corsResponse({ error: 'Something went wrong. Please try again.' }, 500, origin); }
+  async function doLogin(email, password) {
+    const existing = await getUser(email, env);
+    if (!existing) return null;
+    const hashed = await hashPw(password, existing.salt);
+    if (hashed !== existing.password) return null;
+    return await createJWT({ id: existing.id, email: existing.email, name: existing.name }, jwtSecret);
   }
 
-  if (path === '/api/auth/signup-redirect' && method === 'POST') {
+  if ((path === '/api/auth/signup' || path === '/api/auth/signup-redirect') && method === 'POST') {
     try {
       const { email, password, name, redirect } = await request.json();
       if (!email || !password) return corsResponse({ error: 'Email and password are required' }, 400, origin);
       if (password.length < 6) return corsResponse({ error: 'Password must be at least 6 characters' }, 400, origin);
-      if (await getUser(email, env)) return corsResponse({ error: 'An account with this email already exists' }, 409, origin);
+
+      // If user already exists (from any Acronous app), log them in directly
+      const loginToken = await doLogin(email, password);
+      if (loginToken) {
+        if (path === '/api/auth/signup-redirect') {
+          const target = (redirect || '/') + ((redirect || '').includes('?') ? '&' : '?') + 'token=' + loginToken;
+          const res = corsResponse({ success: true, redirectUrl: target, token: loginToken }, 200, origin);
+          res.headers.append('Set-Cookie', setCookie(loginToken, hostname));
+          return res;
+        }
+        const decoded = await verifyJWT(loginToken, jwtSecret);
+        const res = corsResponse({ success: true, token: loginToken, user: { id: decoded.id, email: decoded.email, name: decoded.name } }, 200, origin);
+        res.headers.append('Set-Cookie', setCookie(loginToken, hostname));
+        return res;
+      }
+
       const salt = crypto.randomUUID();
       const hashed = await hashPw(password, salt);
       const user = { id: crypto.randomUUID(), email: email.toLowerCase(), name: name || email.split('@')[0], salt, password: hashed, createdAt: new Date().toISOString() };
       await saveUser(user, env);
       const token = await createJWT({ id: user.id, email: user.email, name: user.name }, jwtSecret);
-      const target = (redirect || '/') + ((redirect || '').includes('?') ? '&' : '?') + 'token=' + token;
-      const res = corsResponse({ success: true, redirectUrl: target, token }, 200, origin);
+
+      if (path === '/api/auth/signup-redirect') {
+        const target = (redirect || '/') + ((redirect || '').includes('?') ? '&' : '?') + 'token=' + token;
+        const res = corsResponse({ success: true, redirectUrl: target, token }, 200, origin);
+        res.headers.append('Set-Cookie', setCookie(token, hostname));
+        return res;
+      }
+
+      const res = corsResponse({ success: true, token, user: { id: user.id, email: user.email, name: user.name } }, 200, origin);
       res.headers.append('Set-Cookie', setCookie(token, hostname));
       return res;
-    } catch { return corsResponse({ error: 'Authentication failed. Please try again.' }, 500, origin); }
+    } catch (e) { return corsResponse({ error: 'Something went wrong. Please try again.' }, 500, origin); }
   }
 
   if (path === '/api/auth/login' && method === 'POST') {
