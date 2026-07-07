@@ -1,0 +1,21 @@
+name = "navigwiz-auth"
+main = "src/index.js"
+compatibility_date = "2025-04-01"
+
+[[kv_namespaces]]
+binding = "AUTH_USERS"
+id = "eb112976703e4447af69c13dd5f8824c"
+preview_id = "eb112976703e4447af69c13dd5f8824c"
+
+[env.production]
+kv_namespaces = [
+  { binding = "AUTH_USERS", id = "eb112976703e4447af69c13dd5f8824c" }
+]
+route = "navigwiz.acronous.com/*"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+NAVIGWIZ_APP_URL = "https://navigwiz.pages.dev"
+
+[env.development]
+vars = { ENVIRONMENT = "development", NAVIGWIZ_APP_URL = "http://localhost:8080" }

@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/browser_service.dart';
 import '../services/theme_service.dart';
+import '../services/central_auth_service.dart';
 import '../utils/domain_helper.dart';
+import '../providers/auth_provider.dart';
 import '../providers/workspace_provider.dart';
 import '../providers/memory_provider.dart';
 import '../widgets/address_bar.dart';
@@ -503,6 +505,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
             Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
           }),
+          if (kIsWeb)
+            _buildTitleButton(Icons.logout, 'Sign Out', () async {
+              final auth = Provider.of<AuthProvider>(context, listen: false);
+              await auth.signOut();
+              CentralAuthService().redirectToLogout();
+            }),
           const Spacer(),
           if (!kIsWeb) ...[
             _buildWindowControl(Icons.remove, Colors.grey[600]!),

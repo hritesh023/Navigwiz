@@ -1,0 +1,62 @@
+name: Deploy Navigwiz Auth Worker
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'auth-worker/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'auth-worker/**'
+  workflow_dispatch:
+
+env:
+  WORKER_NAME: navigwiz-auth
+  DIRECTORY: auth-worker
+
+jobs:
+  deploy:
+    name: Deploy Auth Worker
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: ${{ env.DIRECTORY }}/package-lock.json
+
+    - name: Install wrangler
+      run: npm install -g wrangler@latest
+
+    - name: Install dependencies
+      run: |
+        cd ${{ env.DIRECTORY }}
+        npm ci
+
+    - name: Deploy to Cloudflare
+      run: |
+        cd ${{ env.DIRECTORY }}
+        npx wrangler deploy --env production
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+    - name: Verify deployment
+      run: |
+        echo "Auth worker deployed to navigwiz.acronous.com"
+        echo "Login: https://navigwiz.acronous.com/login"
+        echo "Health: https://navigwiz.acronous.com/health"
+
+    - name: Set JWT_SECRET
+      if: github.ref == 'refs/heads/main'
+      run: |
+        cd ${{ env.DIRECTORY }}
+        echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET --env production
+      shell: bash
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

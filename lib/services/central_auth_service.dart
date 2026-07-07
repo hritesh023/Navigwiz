@@ -24,13 +24,13 @@ class CentralAuthService {
   String? get userName => _userName;
 
   String get _authUrl {
-    // Use same origin on web so auth requests go through the Cloudflare Worker
-    // (which handles /api/auth/* paths on any subdomain), avoiding CORS issues.
+    // Use the Navigwiz auth worker origin on web so auth requests go through
+    // the Cloudflare Worker at navigwiz.acronous.com (which handles /api/auth/*)
     try {
       final origin = web.window.location.origin;
       if (origin.isNotEmpty) return origin;
     } catch (_) {}
-    return 'https://auth.acronous.com';
+    return 'https://navigwiz.acronous.com';
   }
 
   Future<void> initialize() async {
@@ -170,6 +170,10 @@ class CentralAuthService {
       await http.post(Uri.parse('$_authUrl/api/auth/logout'));
     } catch (_) {}
     await _clearToken();
+  }
+
+  void redirectToLogout() {
+    web.window.location.href = '$_authUrl/login';
   }
 
   void redirectToLogin() {

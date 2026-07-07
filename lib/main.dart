@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'screens/browser_screen.dart';
-import 'screens/login_screen.dart';
 
 import 'services/browser_service.dart';
 import 'services/ai_service.dart';
@@ -21,8 +20,15 @@ import 'providers/project_provider.dart';
 import 'providers/settings_provider.dart';
 import 'config/app_config.dart';
 
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool _redirected = false;
 
   @override
   Widget build(BuildContext context) {
@@ -30,13 +36,17 @@ class AuthGate extends StatelessWidget {
     if (auth.isSignedIn) {
       return const BrowserScreen();
     }
-    // Redirect to centralized auth on first build if not signed in
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!auth.isSignedIn) {
+    if (!_redirected) {
+      _redirected = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         auth.redirectToLogin();
-      }
-    });
-    return const LoginScreen();
+      });
+    }
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(color: Color(0xFFf59e0b)),
+      ),
+    );
   }
 }
 
@@ -169,7 +179,6 @@ class NavigwizApp extends StatelessWidget {
             initialRoute: '/',
             routes: {
               '/': (context) => const AuthGate(),
-              '/login': (context) => const LoginScreen(),
               '/home': (context) => const BrowserScreen(),
             },
           );
