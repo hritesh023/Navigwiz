@@ -1,6 +1,11 @@
 import io
+import base64
+import urllib.parse
+import logging
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
@@ -16,7 +21,6 @@ class ImageGenerator:
 
     def generate(self, prompt, **kwargs):
         import requests
-        import urllib.parse
         import time
 
         width = kwargs.get("width") or self.config.IMAGE_WIDTH
@@ -57,6 +61,90 @@ class ImageGenerator:
                         time.sleep(2 * (attempt + 1))
                         continue
         return None, last_error
+
+    def edit_image(self, image_bytes, prompt, **kwargs):
+        """Multi-strategy image editing pipeline (from Acronous AI)."""
+        import requests
+        import time
+
+        strategies = [
+            self._edit_pollinations_kontext,
+            self._edit_pollinations_img2img,
+            self._edit_llm_guided,
+        ]
+
+        for strategy in strategies:
+            try:
+                result = strategy(image_bytes, prompt, **kwargs)
+                if result:
+                    return result, None
+            except Exception as e:
+                logger.warning(f"Edit strategy {strategy.__name__} failed: {e}")
+                continue
+
+        return None, "All editing strategies failed"
+
+    def _edit_pollinations_kontext(self, image_bytes, prompt, **kwargs):
+        """Pollinations OpenAI-compatible edit endpoint with kontext model."""
+        import requests
+        try:
+            ct = "image/png" if image_bytes[:4] == b'\x89PNG' else "image/jpeg"
+            ext = "png" if "png" in ct else "jpg"
+            files = {"image": (f"image.{ext}", image_bytes, ct)}
+            data = {"prompt": prompt, "model": "kontext"}
+            resp = requests.post("https://gen.pollinations.ai/v1/images/edits", files=files, data=data, timeout=60)
+            if resp.status_code != 200:
+                return None
+            ct_resp = resp.headers.get("content-type", "")
+            if "application/json" in ct_resp:
+                j = resp.json()
+                b64 = j.get("data", [{}])[0].get("b64_json")
+                if b64:
+                    return base64.b64decode(b64)
+                return None
+            if resp.content and len(resp.content) > 200:
+                return resp.content
+            return None
+        except Exception:
+            return None
+
+    def _edit_pollinations_img2img(self, image_bytes, prompt, **kwargs):
+        """Pollinations img2img with original dimensions."""
+        import requests
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            w, h = img.size
+            b64 = base64.b64encode(image_bytes).decode()
+            resp = requests.post(
+                f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}",
+                json={"img": b64, "width": w, "height": h, "nofeed": True},
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                return None
+            if resp.content and len(resp.content) > 200:
+                return resp.content
+            return None
+        except Exception:
+            return None
+
+    def _edit_llm_guided(self, image_bytes, prompt, **kwargs):
+        """LLM analyzes image context, generates a text-to-image prompt for the edited version."""
+        if not self._llm:
+            return None
+        try:
+            b64 = base64.b64encode(image_bytes).decode()
+            desc_prompt = f"""Describe this image in detail (subject, clothing, background, colors, composition).
+The user wants to edit it: "{prompt}"
+Write a prompt for generating the EDITED version. Include key details plus the change. Return ONLY the prompt, 1-2 sentences."""
+            gen_prompt = self._llm.generate(desc_prompt, system_prompt="You create image generation prompts. Return ONLY the prompt.")
+            if not gen_prompt or len(gen_prompt.strip()) < 15:
+                return None
+            gen_prompt = gen_prompt.strip().strip('"').strip("'")
+            img_bytes, _ = self.generate(gen_prompt)
+            return img_bytes
+        except Exception:
+            return None
 
     def _postprocess_image(self, image, image_type="realistic"):
         try:
@@ -123,17 +211,14 @@ class ImageGenerator:
 
     def img2img(self, image_b64, prompt, strength=0.7, mask_description=None):
         try:
-            import base64
-            import io as io_mod
             img_data = base64.b64decode(image_b64)
-            img = Image.open(io_mod.BytesIO(img_data))
+            img = Image.open(io.BytesIO(img_data))
             img.thumbnail((512, 512), Image.LANCZOS)
-            enhanced = prompt
-            if mask_description:
-                enhanced = f"{prompt} (focus on: {mask_description})"
-            img_bytes, error = self.generate(enhanced)
-            if img_bytes:
-                return {"image_data": base64.b64encode(img_bytes).decode("utf-8"), "image_type": "png"}
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            result, error = self.edit_image(buf.getvalue(), prompt)
+            if result:
+                return {"image_data": base64.b64encode(result).decode("utf-8"), "image_type": "png"}
             return None
         except Exception:
             return None

@@ -3,6 +3,35 @@ import re
 import base64
 
 
+_MUST_SEARCH_PATTERNS = [
+    re.compile(r'\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month|current month)\b', re.I),
+    re.compile(r'\b(?:right now|at the moment|as of now|as of today|currently|presently|latest|recent|updated)\b', re.I),
+    re.compile(r'\b(?:chief minister|cm of|cm is|president of|president is|prime minister|pm of|pm is|governor|mayor|minister of|minister is|who is the|who leads|who heads|current leader)\b', re.I),
+    re.compile(r'\b(?:election|elections|voting|poll|polls|cabinet|parliament|senate|congress|assembly|legislature|government|opposition|coalition)\b', re.I),
+    re.compile(r'\b(?:score|scored|won|lost|match|game|tournament|championship|league|ipl|world cup|olympics|fifa|nba|nfl|cricket|football|soccer|tennis)\b', re.I),
+    re.compile(r'\b(?:price|cost|rate|value|stock|share|market|rupee|dollar|euro|gdp|inflation|interest rate|salary|wage|tax)\b', re.I),
+    re.compile(r'\b(?:weather|temperature|rain|rainfall|forecast|climate|humidity|wind|storm|cyclone|flood)\b', re.I),
+    re.compile(r'\b(?:news|headlines|breaking|update|updates|happening|event|events|incident|accident|disaster|crisis|war|conflict|attack|protest)\b', re.I),
+    re.compile(r'\b(?:population|census|demographics|stats|statistics|data|numbers|figure|figures|count|total)\b', re.I),
+    re.compile(r'\bwho (?:is|was|are|were) (?:the |a |an )', re.I),
+    re.compile(r'\bwhat (?:is|are|was|were) (?:the |a |an )', re.I),
+]
+
+_DEEP_PATTERNS = [
+    re.compile(r'(?:write|create|build|develop|implement|code|program|script|function|algorithm|debug|fix|refactor|optimize)', re.I),
+    re.compile(r'(?:research|analyze|investigate|compare|versus|vs\.?|difference between|comprehensive|in-depth|detailed report|step by step)', re.I),
+    re.compile(r'(?:design|architect|plan|strategy|roadmap|proposal)', re.I),
+    re.compile(r'(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|html|css|sql|dart)', re.I),
+]
+
+_INSTANT_PATTERNS = [
+    re.compile(r'^(hi|hey|hello|yo|sup|howdy|hii+|heyy+|helloo+|greetings)$', re.I),
+    re.compile(r'^(thanks?|thank you|thx|ty|tysm|appreciate)$', re.I),
+    re.compile(r'^(bye|goodbye|see ya|later|good night|gn)$', re.I),
+    re.compile(r'^(ok|okay|cool|nice|great|awesome|wow|yes|no|yeah|nah|yep|nope)$', re.I),
+]
+
+
 class QueryRouter:
     def __init__(self, neural_engine, core_engine):
         self.neural = neural_engine
@@ -11,7 +40,14 @@ class QueryRouter:
     def route(self, query):
         query_lower = query.lower().strip()
         embedding = self.core.embedder.embed(query)
-        route_type = self._determine_type_with_llm(query)
+
+        # Fast regex pre-filter — skip LLM call for known patterns
+        fast_type = self._fast_classify(query_lower)
+        if fast_type:
+            route_type = fast_type
+        else:
+            route_type = self._determine_type_with_llm(query)
+
         features = {
             "type": route_type,
             "needs_search": route_type in ("web_search", "factual", "news"),
@@ -21,6 +57,77 @@ class QueryRouter:
             "word_count": len(query_lower.split()),
         }
         return features
+
+    def _fast_classify(self, query_lower):
+        """Fast regex pre-classifier. Returns type string or None to fall back to LLM."""
+        q = query_lower.strip()
+
+        # Instant: greetings, thanks, etc. → general_chat
+        for p in _INSTANT_PATTERNS:
+            if p.match(q):
+                return "general_chat"
+
+        # Deep: code, research, complex tasks → needs full brain
+        for p in _DEEP_PATTERNS:
+            if p.search(q):
+                return "code_generation" if any(k in q for k in ("code", "program", "function", "debug", "fix", "script", "python", "javascript", "typescript")) else "web_search"
+
+        # Must-search: factual/time/current-events → always web_search
+        for p in _MUST_SEARCH_PATTERNS:
+            if p.search(q):
+                return "web_search"
+
+        # Questions with question words → web_search
+        if q.endswith("?"):
+            info_kw = re.search(r'\b(?:who|what|where|when|why|how|which|is|are|was|were|do|does|did|has|have|had|can|could|will|would)\b', q)
+            if info_kw:
+                return "web_search"
+
+        # Return None to trigger LLM classification
+        return None
+
+    def _is_simple_factual(self, query):
+        """Check if a query is a simple factual lookup (time, date, who is X, etc.)."""
+        q = query.lower().strip()
+        patterns = [
+            re.compile(r'\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month)\b', re.I),
+            re.compile(r'\b(?:who is|who was|who are|who were) (?:the |a |an )', re.I),
+            re.compile(r'\b(?:what is|what are|what was|what were) (?:the |a |an )', re.I),
+            re.compile(r'\b(?:president|prime minister|chief minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach) (?:of|for|at)', re.I),
+            re.compile(r'\b(?:score|won|lost|beat)', re.I),
+            re.compile(r'\b(?:price|cost|rate|value|stock|share|market)', re.I),
+            re.compile(r'\b(?:population|area|distance|height|weight|age)', re.I),
+            re.compile(r'\b(?:weather|temperature|rain|forecast)', re.I),
+        ]
+        return any(p.search(q) for p in patterns)
+
+    def _extract_factual_answer(self, query):
+        """Try to extract a factual answer directly from web search results without LLM."""
+        try:
+            search_data = self._execute_web_search(query)
+            if not search_data:
+                return None
+            lines = [l.strip() for l in search_data.split('\n') if l.strip().startswith('-') or l.strip().startswith('[')]
+            if not lines:
+                return None
+            query_words = re.findall(r'\b\w{3,}\b', query.lower())
+            best_line = ''
+            best_score = 0
+            for line in lines:
+                lower = line.lower()
+                score = sum(1 for w in query_words if w in lower)
+                if score > best_score:
+                    best_score = score
+                    best_line = line
+            if not best_line or best_score < 2:
+                return None
+            answer = re.sub(r'^-\s*', '', best_line)
+            answer = re.sub(r'^\[.*?\]\(.*?\):\s*', '', answer).strip()
+            if len(answer) > 500:
+                answer = answer[:500] + '...'
+            return answer if answer else None
+        except Exception:
+            return None
 
     def _determine_type_with_llm(self, query):
         prompt = f"""Classify this user request into exactly one category. Return ONLY the category name, nothing else.
@@ -90,8 +197,17 @@ Category:"""
                 result = self._handle_image_generation(query, context)
             elif route_type == "file_generation":
                 result = self._handle_file_generation(query, context)
-            elif route_type == "web_search" or route_type == "factual" or route_type == "news":
-                if context and "[Current date and time:" in context:
+            elif route_type in ("web_search", "factual", "news"):
+                # Fast path: try to extract factual answer directly from search results
+                if self._is_simple_factual(query):
+                    direct = self._extract_factual_answer(query)
+                    if direct:
+                        result = {"type": "factual", "content": direct, "sources": []}
+                    elif context and "[Current date and time:" in context:
+                        result = self._handle_time_query(query, context, max_tokens)
+                    else:
+                        result = self._handle_search(query, context, max_tokens)
+                elif context and "[Current date and time:" in context:
                     result = self._handle_time_query(query, context, max_tokens)
                 else:
                     result = self._handle_search(query, context, max_tokens)
@@ -102,7 +218,7 @@ Category:"""
             else:
                 result = self._handle_chat(query, context, max_tokens)
         except Exception:
-            result = {"type": "error", "content": "Something went wrong. Please try again.", "sources": []}
+            result = {"type": "error", "content": "I ran into an issue processing that. Could you try rephrasing or asking something else?", "sources": []}
 
         if result and result.get("content"):
             try:
@@ -162,10 +278,16 @@ Category:"""
 
 User: {query}
 
-Answer using ONLY the web search results above. Do not use any pre-trained knowledge — the web search results are the only authoritative source. If the search results lack specific information, be honest that you could not find current data on this topic. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
+The web search results above are LIVE, FRESH, and AUTHORITATIVE. Use them as your primary source. Never say "based on my training data" or "I don't have real-time access" — you do. Never say "please check external sources" — the info is right here. Never say "I searched the web". Just give the answer directly and naturally, like a knowledgeable friend."""
             yield from self.core.llm.generate_stream(prompt, max_tokens=max_tokens)
 
     def _refine_search_query(self, query):
+        # Fast path: short queries don't need refinement
+        words = query.split()
+        if len(words) <= 8:
+            from datetime import datetime, timezone
+            year = datetime.now(timezone.utc).astimezone().year
+            return [query, f"{query} {year}"]
         try:
             prompt = f"""Rewrite this question into 2-3 concise search queries that would best find the answer on a search engine. Return each query on a separate line, nothing else.
 
@@ -216,7 +338,7 @@ Search queries:"""
 
 The user asked: {query}
 
-Using the date, time, and location information provided above, answer their question conversationally and accurately. Be warm and natural. Never mention or repeat the internal markers like [Current date and time:] or [User location:]. Just give a natural, friendly answer."""
+Using the date, time, and location information provided above, answer their question conversationally and accurately. Be warm and natural. Never mention or repeat the internal markers like [Current date and time:] or [User location:]. Never say "based on my training data". Just give a natural, friendly answer directly."""
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "chat", "content": (response.strip() if response else ""), "sources": []}
 
@@ -258,13 +380,28 @@ Web search results for "{query}":
 
 {search_data}
 
-Answer using ONLY the web search results above. Do not use any pre-trained knowledge — the web results are the authoritative source. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources or official websites — you already have the information. Answer directly, confidently, and concisely. When possible, mention the source names to add credibility."""
+## CRITICAL INSTRUCTION — YOU MUST FOLLOW THIS
+The web search results above are LIVE, FRESH, and AUTHORITATIVE. You MUST:
+1. USE the web search results as your PRIMARY source of truth
+2. Extract the specific answer from the search results and present it clearly
+3. If multiple search results confirm the same fact, state it confidently
+4. If the search results contain the answer but are scattered, synthesize them into one clear answer
+5. ONLY if the search results are completely empty or irrelevant, say "I couldn't find current information on that"
+
+YOU MUST NOT:
+- Never say "based on my training data" or "as of my knowledge cutoff" when search results are available
+- Never say "I don't have real-time access" — you DO, the results are right above
+- Never say "please check external sources" — the information IS already here
+- Never ignore the search results and answer from memory
+- Never say "I searched the web" or "according to search results" — just give the answer naturally
+
+Speak naturally and directly — just give the answer like a knowledgeable friend. Be concise but complete."""
         else:
             prompt = f"""{context}
 
 The user asked: {query}
 
-I searched the web but could not find any current information from multiple search sources. Do NOT use your pre-trained knowledge to answer. Be honest and tell the user that no current information was found from web search. Suggest trying a more specific query or different search terms. Never make up information or fall back to training data. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
+No web search results were found. Do NOT use your pre-trained knowledge. Be honest and tell the user that no current information was found. Suggest trying a more specific query. Never make up information or fall back to training data."""
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "factual", "content": response, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
@@ -332,7 +469,7 @@ Respond naturally with a warm, friendly greeting. Keep it concise and conversati
 
 User: {query}
 
-Answer naturally using any relevant web search results above. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
+The web search results above are LIVE and AUTHORITATIVE. Use them as your primary source. Never say "based on my training data", "I don't have real-time access", or "check external sources". Never say "I searched the web". Answer naturally and directly, like a knowledgeable friend."""
         else:
             prompt = f"""User: "{query}"
 

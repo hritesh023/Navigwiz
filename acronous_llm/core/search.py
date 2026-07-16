@@ -3,6 +3,17 @@ from bs4 import BeautifulSoup
 import re
 import json
 import urllib.parse
+import random
+import logging
+
+logger = logging.getLogger(__name__)
+
+SEARXNG_URLS = [
+    'https://searx.be/search', 'https://search.sapti.me/search',
+    'https://searx.tuxcloud.net/search', 'https://searx.work/search',
+    'https://searx.info/search', 'https://search.mdosch.de/search',
+    'https://searx.xyz/search', 'https://searx.no/search',
+]
 
 
 class WebSearch:
@@ -33,60 +44,147 @@ class WebSearch:
             self.serpapi_key = self.config.SERPAPI_KEY
 
     def search(self, query, max_results=5):
-        results = []
-        if self.config.SERPAPI_KEY and self.provider in ("serpapi", "auto"):
-            try:
-                results = self._serpapi_search(query, max_results)
-            except Exception:
-                pass
-        if not results and self.ddg is not None:
-            try:
-                results = self._duckduckgo_search(query, max_results)
-            except Exception:
-                pass
-        if not results:
-            try:
-                results = self._google_scrape(query, max_results)
-            except Exception:
-                pass
-        if not results:
-            try:
-                results = self._scrape_fallback(query, max_results)
-            except Exception:
-                pass
-        return results
+        """Multi-engine search — tries DuckDuckGo, SearXNG, Wikipedia, Google News, Hacker News in parallel."""
+        import concurrent.futures
 
-    def search_multi_source(self, query, max_results=5):
+        engines = [
+            ("duckduckgo", self._duckduckgo_search),
+            ("searxng", self._searxng_search),
+            ("wikipedia", self._wikipedia_search),
+            ("google_news_rss", self._google_news_rss_search),
+            ("hackernews", self._hackernews_search),
+            ("google", self._google_scrape),
+        ]
+
         all_results = []
         seen_urls = set()
-        providers = [self._serpapi_search, self._duckduckgo_search, self._google_scrape, self._scrape_fallback]
-        for provider_method in providers:
-            try:
-                batch = provider_method(query, max_results + 2)
-                for r in batch:
-                    url = r.get("url", "")
-                    snippet = r.get("snippet", "")
-                    if url and url not in seen_urls and snippet:
-                        seen_urls.add(url)
-                        all_results.append(r)
-            except Exception:
-                pass
-            if len(all_results) >= max_results * 2:
-                break
-        if not all_results:
-            for provider_method in providers:
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(fn, query, max_results): name for name, fn in engines}
+            for future in concurrent.futures.as_completed(futures, timeout=10):
+                name = futures[future]
                 try:
-                    batch = provider_method(query, max_results + 2)
-                    for r in batch:
+                    results = future.result()
+                    for r in results:
                         url = r.get("url", "")
                         if url and url not in seen_urls:
                             seen_urls.add(url)
                             all_results.append(r)
-                    if all_results:
-                        break
                 except Exception:
                     pass
-        return all_results[:max_results * 2]
+
+        return all_results[:max_results]
+
+    def search_multi_source(self, query, max_results=5):
+        return self.search(query, max_results)
+
+    def _searxng_search(self, query, max_results):
+        """Search via public SearXNG instances (free, unlimited, no API key)."""
+        shuffled = SEARXNG_URLS[:]
+        random.shuffle(shuffled)
+        for url in shuffled:
+            try:
+                u = urllib.parse.urlparse(url)
+                params = urllib.parse.urlencode({
+                    'q': query, 'format': 'json', 'language': 'en', 'pageno': '1',
+                })
+                search_url = f"{u.scheme}://{u.netloc}{u.path}?{params}"
+                resp = requests.get(search_url, headers={
+                    'Accept': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                }, timeout=5)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                results = []
+                for item in (data.get("results") or [])[:max_results]:
+                    title = item.get("title", "")
+                    url_r = item.get("url", "")
+                    snippet = item.get("content", "")[:200]
+                    if title and url_r:
+                        results.append({"title": title, "url": url_r, "snippet": snippet})
+                if results:
+                    return results
+            except Exception:
+                continue
+        return []
+
+    def _wikipedia_search(self, query, max_results=3):
+        """Search Wikipedia API — always free, reliable, high quality."""
+        try:
+            sr = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={"action": "query", "list": "search", "srsearch": query, "format": "json", "srlimit": max_results},
+                headers={"User-Agent": "NavigwizAI/2.0"},
+                timeout=5,
+            )
+            if sr.status_code != 200:
+                return []
+            data = sr.json()
+            titles = [s["title"] for s in data.get("query", {}).get("search", [])]
+            results = []
+            for title in titles[:max_results]:
+                try:
+                    pr = requests.get(
+                        f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}",
+                        headers={"User-Agent": "NavigwizAI/2.0"},
+                        timeout=4,
+                    )
+                    if pr.status_code == 200:
+                        page = pr.json()
+                        if page.get("extract"):
+                            results.append({
+                                "title": page["title"],
+                                "url": page.get("content_urls", {}).get("desktop", {}).get("page", f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title)}"),
+                                "snippet": page["extract"][:500],
+                            })
+                except Exception:
+                    continue
+            return results
+        except Exception:
+            return []
+
+    def _google_news_rss_search(self, query, max_results=3):
+        """Google News RSS — free, fresh news results."""
+        try:
+            resp = requests.get(
+                f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en&gl=US&ceid=US:en",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=6,
+            )
+            if resp.status_code != 200:
+                return []
+            items = re.findall(r'<item>[\s\S]*?</item>', resp.text)
+            results = []
+            seen = set()
+            for item in items[:max_results * 2]:
+                title_m = re.search(r'<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>', item)
+                link_m = re.search(r'<link>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>', item)
+                if title_m:
+                    title = title_m.group(1).strip()
+                    link = link_m.group(1).strip() if link_m else ""
+                    if title and title not in seen:
+                        seen.add(title)
+                        results.append({"title": title, "url": link, "snippet": ""})
+                        if len(results) >= max_results:
+                            break
+            return results
+        except Exception:
+            return []
+
+    def _hackernews_search(self, query, max_results=3):
+        """Hacker News via Algolia — free, great for tech topics."""
+        try:
+            resp = requests.get(
+                f"https://hn.algolia.com/api/v1/search?query={urllib.parse.quote(query)}&hitsPerPage={max_results}&tags=story",
+                timeout=5,
+            )
+            if resp.status_code != 200:
+                return []
+            hits = resp.json().get("hits", [])
+            return [{"title": h.get("title", ""), "url": h.get("url", f"https://news.ycombinator.com/item?id={h.get('objectID', '')}"), "snippet": ""} for h in hits[:max_results]]
+        except Exception:
+            return []
 
     def _serpapi_search(self, query, max_results):
         params = {
