@@ -274,7 +274,14 @@ Category:"""
             else:
                 result = self._handle_chat(query, context, max_tokens)
         except Exception:
-            result = {"type": "error", "content": "I ran into an issue processing that. Could you try rephrasing or asking something else?", "sources": []}
+            try:
+                error_response = self.core.llm.generate(
+                    "Generate a brief, friendly error message for a failed request. Ask the user to rephrase or try something else. Keep it to 1-2 sentences.",
+                    max_tokens=100
+                )
+                result = {"type": "error", "content": error_response or "I encountered an issue. Could you try rephrasing your request?", "sources": []}
+            except Exception:
+                result = {"type": "error", "content": "I encountered an issue. Could you try rephrasing your request?", "sources": []}
 
         if result and result.get("content"):
             try:
@@ -348,7 +355,7 @@ The web search results above are LIVE, FRESH, and AUTHORITATIVE. Use them as you
         if len(words) <= 8:
             from datetime import datetime, timezone
             year = datetime.now(timezone.utc).astimezone().year
-            return [query, f"{query} {year}"]
+            return [query, f"{query} {year}", f"{query} current"]
         try:
             prompt = f"""Rewrite this question into 2-3 concise search queries that would best find the answer on a search engine. Return each query on a separate line, nothing else.
 
@@ -448,6 +455,7 @@ The web search results above are LIVE, FRESH, and AUTHORITATIVE. You MUST:
 3. If multiple search results confirm the same fact, state it confidently
 4. If the search results contain the answer but are scattered, synthesize them into one clear answer
 5. ONLY if the search results are completely empty or irrelevant, say "I couldn't find current information on that"
+6. ALWAYS answer based on the SEARCH RESULTS FIRST, not your training data — your training data may be outdated
 
 YOU MUST NOT:
 - Never say "based on my training data" or "as of my knowledge cutoff" when search results are available
