@@ -101,6 +101,34 @@ class QueryRouter:
         ]
         return any(p.search(q) for p in patterns)
 
+    def _is_time_query(self, query):
+        """Check if a query is asking for the current time/date."""
+        q = query.lower().strip()
+        if re.search(r'\b(?:what time|current time|time now|what date|current date|date today|what day|day today|what year|current year|what month|today.s date)\b', q, re.I):
+            return True
+        if re.match(r'^(time|date|day|year|month)\s*\??$', q, re.I):
+            return True
+        return False
+
+    def _get_time_answer(self, query):
+        """Generate direct answer for time/date queries from system clock."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        q = query.lower().strip()
+        time_str = now.strftime("%I:%M:%S %p UTC")
+        date_str = now.strftime("%A, %B %d, %Y")
+        if re.search(r'\btime\b', q) and not re.search(r'\bdate\b|\bday\b', q):
+            content = f"It's currently **{time_str}** on {date_str}."
+        elif re.search(r'\bdate\b|\bday\b|\btoday\b', q) and not re.search(r'\btime\b', q):
+            content = f"Today is **{date_str}**. The current time is {time_str}."
+        elif re.search(r'\byear\b', q):
+            content = f"The current year is **{now.year}**."
+        elif re.search(r'\bmonth\b', q):
+            content = f"The current month is **{now.strftime('%B %Y')}**."
+        else:
+            content = f"It's currently **{date_str}, {time_str}**."
+        return {"type": "factual", "content": content, "sources": []}
+
     def _extract_factual_answer(self, query):
         """Try to extract a factual answer directly from web search results without LLM."""
         try:
@@ -110,21 +138,46 @@ class QueryRouter:
             lines = [l.strip() for l in search_data.split('\n') if l.strip().startswith('-') or l.strip().startswith('[')]
             if not lines:
                 return None
-            query_words = re.findall(r'\b\w{3,}\b', query.lower())
+            stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'who', 'what', 'when', 'where', 'why', 'how', 'which', 'of', 'in', 'on', 'at', 'to', 'for', 'as', 'do', 'does', 'did', 'has', 'have', 'had', 'can', 'could', 'will', 'would', 'should', 'may', 'might', 'shall'}
+            query_words = [w for w in re.findall(r'\b\w{3,}\b', query.lower()) if w not in stop_words]
+            if not query_words:
+                return None
             best_line = ''
             best_score = 0
             for line in lines:
                 lower = line.lower()
-                score = sum(1 for w in query_words if w in lower)
+                score = sum(2 for w in query_words if w in lower)
+                if re.search(r'\bis\s+\w', lower):
+                    score += 1
+                if re.search(r'\d{4}', lower):
+                    score += 1
+                if len(line) > 300:
+                    score -= 1
                 if score > best_score:
                     best_score = score
                     best_line = line
-            if not best_line or best_score < 2:
+            if not best_line or best_score < 3:
                 return None
             answer = re.sub(r'^-\s*', '', best_line)
             answer = re.sub(r'^\[.*?\]\(.*?\):\s*', '', answer).strip()
-            if len(answer) > 500:
-                answer = answer[:500] + '...'
+            if len(answer) > 200:
+                sentences = re.split(r'[.!?]+', answer)
+                best_sentence = ''
+                best_s_score = 0
+                for sentence in sentences:
+                    if len(sentence.strip()) < 10:
+                        continue
+                    lower = sentence.lower()
+                    s_score = sum(2 for w in query_words if w in lower)
+                    if re.search(r'\d{4}', lower):
+                        s_score += 1
+                    if s_score > best_s_score:
+                        best_s_score = s_score
+                        best_sentence = sentence.strip()
+                if best_sentence and best_s_score >= 2:
+                    answer = best_sentence
+                else:
+                    answer = answer[:300] + '...'
             return answer if answer else None
         except Exception:
             return None
@@ -198,8 +251,11 @@ Category:"""
             elif route_type == "file_generation":
                 result = self._handle_file_generation(query, context)
             elif route_type in ("web_search", "factual", "news"):
+                # Fast path: time/date queries — answer from system clock directly
+                if self._is_time_query(query):
+                    result = self._get_time_answer(query)
                 # Fast path: try to extract factual answer directly from search results
-                if self._is_simple_factual(query):
+                elif self._is_simple_factual(query):
                     direct = self._extract_factual_answer(query)
                     if direct:
                         result = {"type": "factual", "content": direct, "sources": []}
