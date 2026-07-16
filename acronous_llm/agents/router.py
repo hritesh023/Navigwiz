@@ -290,6 +290,9 @@ Category:"""
             except Exception:
                 pass
 
+        if not result or not result.get("content"):
+            result = {"type": "chat", "content": "I'm here to help! Could you rephrase that or ask me something else?", "sources": []}
+
         return result
 
     def execute_stream(self, query, route, session_id="default", messages=None, context=None, max_tokens=None):
@@ -323,6 +326,8 @@ Category:"""
                 result = self._handle_search(query, context, max_tokens)
             content = result.get("content", "")
             chunk_size = 30
+            if not content:
+                content = "I'm here to help! Could you rephrase that?"
             for i in range(0, len(content), chunk_size):
                 yield content[i:i + chunk_size]
         else:
@@ -396,7 +401,7 @@ The user asked: {query}
 
 Using the date, time, and location information provided above, answer their question conversationally and accurately. Be warm and natural. Never mention or repeat the internal markers like [Current date and time:] or [User location:]. Never say "based on my training data". Just give a natural, friendly answer directly."""
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
-        return {"type": "chat", "content": (response.strip() if response else ""), "sources": []}
+        return {"type": "chat", "content": (response.strip() if response else "I'm here to help! Could you rephrase that?"), "sources": []}
 
     def _handle_search(self, query, context, max_tokens=None):
         search_data = ""
@@ -486,7 +491,7 @@ No web search results were found. Do NOT use your pre-trained knowledge. Be hone
 
 Respond naturally with a warm, friendly greeting. Keep it concise and conversational."""
             response = self.core.llm.generate(prompt, max_tokens=max_tokens)
-            return {"type": "chat", "content": (response.strip() if response else ""), "sources": []}
+            return {"type": "chat", "content": (response.strip() if response else "Hey there! How can I help you today?"), "sources": []}
 
         search_data = ""
         search_results = []
@@ -531,7 +536,7 @@ The web search results above are LIVE and AUTHORITATIVE. Use them as your primar
 
 Respond naturally and conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
-        content = response.strip() if response else ""
+        content = response.strip() if response else "I'm here to help! Could you rephrase that?"
         return {"type": "chat", "content": content, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
     def _needs_planning(self, query):
@@ -812,8 +817,8 @@ I applied the following PIL operations and the image was edited successfully. De
                     )
                     content = response_text.strip().strip('"').strip("'").strip()
                 except Exception:
-                    content = ""
-                return {"type": "image_edit", "content": content, "image_data": img_b64, "image_type": "png", "sources": []}
+                    content = "Done! I've edited the image for you."
+                return {"type": "image_edit", "content": content or "Done! I've edited the image for you.", "image_data": img_b64, "image_type": "png", "sources": []}
 
             elif approach in ("inpaint", "img2img"):
                 from io import BytesIO
@@ -841,8 +846,8 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
                         )
                         content = response_text.strip().strip('"').strip("'").strip()
                     except Exception:
-                        content = ""
-                    return {"type": "image_edit", "content": content, "image_data": result["image_data"], "image_type": "png", "sources": []}
+                        content = "Done! I've edited the image for you."
+                    return {"type": "image_edit", "content": content or "Done! I've edited the image for you.", "image_data": result["image_data"], "image_type": "png", "sources": []}
                 return self._modification_error_response(query, "Image editing failed. Please try a different request.", approach)
 
             elif approach == "generate":
