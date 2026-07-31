@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/agent_response.dart';
 import '../models/project.dart';
+import '../services/project_archive.dart';
 
 class ProjectProvider extends ChangeNotifier {
   List<ProjectFile> _files = [];
@@ -142,5 +145,27 @@ class ProjectProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final data = jsonEncode(_files.map((f) => f.toJson()).toList());
     await prefs.setString('project_files', data);
+  }
+
+  String _defaultProjectRoot() {
+    try {
+      if (Platform.isWindows) {
+        return '${Platform.environment['USERPROFILE']}\\NavigwizProjects';
+      }
+      return '${Platform.environment['HOME']}/NavigwizProjects';
+    } catch (_) {
+      return '${Directory.systemTemp.path}/NavigwizProjects';
+    }
+  }
+
+  Future<String> saveAgentProject(AgentProject project) async {
+    if (kIsWeb) {
+      return ProjectArchiveService.saveToDevice(project);
+    }
+
+    final root = _projectRoot.isNotEmpty ? _projectRoot : _defaultProjectRoot();
+    final path = await ProjectArchiveService.saveToDisk(root, project);
+    await refreshFiles(root);
+    return path;
   }
 }

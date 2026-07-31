@@ -11,6 +11,7 @@ class WorkspaceProvider extends ChangeNotifier {
   List<Workspace> get workspaces => _workspaces;
   Workspace? get activeWorkspace => _activeWorkspace;
   bool get isLoading => _isLoading;
+  List<String> get workspaceIds => _workspaces.map((w) => w.id).toList();
 
   static const List<Map<String, String>> _defaultWorkspaces = [
     {'name': 'Startup', 'description': 'Competitor research, pricing analysis, ideas, notes', 'icon': 'rocket_launch'},

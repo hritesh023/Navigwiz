@@ -13,6 +13,9 @@ class BrowserService extends ChangeNotifier {
   WebViewController? _webViewController;
   List<String> _bookmarks = [];
   List<String> _history = [];
+  bool _privateMode = false;
+  String _searchEngine = 'navigwiz';
+  String _homepageUrl = '';
 
   // Per-tab navigation history for web platform
   final Map<String, List<String>> _tabHistory = {};
@@ -26,6 +29,45 @@ class BrowserService extends ChangeNotifier {
   List<String> get bookmarks => List.unmodifiable(_bookmarks);
   List<String> get history => List.unmodifiable(_history);
   String get currentUrl => activeTab?.url ?? '';
+  bool get isPrivateMode => _privateMode;
+  String get searchEngine => _searchEngine;
+  String get homepageUrl => _homepageUrl;
+
+  void setSearchEngine(String engine) {
+    if (_searchEngine == engine) return;
+    _searchEngine = engine;
+    notifyListeners();
+  }
+
+  void setHomepageUrl(String value) {
+    if (_homepageUrl == value) return;
+    _homepageUrl = value;
+    notifyListeners();
+  }
+
+  void setPrivateMode(bool value) {
+    if (_privateMode == value) return;
+    _privateMode = value;
+    if (!value) {
+      clearPrivateData();
+    }
+    notifyListeners();
+  }
+
+  Future<void> clearPrivateData() async {
+    if (!kIsWeb) {
+      try {
+        await WebViewCookieManager().clearCookies();
+        await _webViewController?.clearCache();
+      } catch (e) {
+        debugPrint('Failed to clear private data: $e');
+      }
+    }
+    _history.clear();
+    if (!kIsWeb) {
+      await _saveHistory();
+    }
+  }
 
   bool get canGoBack {
     if (!kIsWeb && _webViewController != null) {
@@ -82,18 +124,21 @@ class BrowserService extends ChangeNotifier {
 
   void createNewTab({String? url}) {
     final tabId = DateTime.now().millisecondsSinceEpoch.toString();
+    final defaultUrl = _homepageUrl.isNotEmpty
+        ? _homepageUrl
+        : DomainHelper.getNavigwizDomain();
     final tab = BrowserTab(
       id: tabId,
-      url: url ?? DomainHelper.getNavigwizDomain(),
+      url: url ?? defaultUrl,
       title: url == null ? 'Navigwiz' : DomainHelper.titleFromUrl(url),
     );
     _tabs.add(tab);
     _activeTabIndex = _tabs.length - 1;
-    _tabHistory[tabId] = [url ?? DomainHelper.getNavigwizDomain()];
+    _tabHistory[tabId] = [url ?? defaultUrl];
     _tabForwardHistory[tabId] = [];
     notifyListeners();
 
-    if (url != null && url != DomainHelper.getNavigwizDomain()) {
+    if (url != null && url != defaultUrl) {
       navigateToUrl(url);
     }
   }
@@ -146,7 +191,10 @@ class BrowserService extends ChangeNotifier {
       }
       _tabs[index] = nextTab;
 
-      if (url != null && url != currentTab.url && url != 'about:blank') {
+      if (url != null &&
+          url != currentTab.url &&
+          url != 'about:blank' &&
+          !_privateMode) {
         _addToHistory(url);
       }
 
@@ -155,6 +203,7 @@ class BrowserService extends ChangeNotifier {
   }
 
   Future<void> _addToHistory(String url) async {
+    if (_privateMode) return;
     if (!_history.contains(url)) {
       _history.insert(0, url);
       if (_history.length > 100) {
@@ -176,6 +225,25 @@ class BrowserService extends ChangeNotifier {
     _bookmarks.remove(url);
     await _saveBookmarks();
     notifyListeners();
+  }
+
+  Future<void> clearHistory() async {
+    _history.clear();
+    if (!kIsWeb) {
+      await _saveHistory();
+    }
+    notifyListeners();
+  }
+
+  Future<void> clearBookmarks() async {
+    _bookmarks.clear();
+    await _saveBookmarks();
+    notifyListeners();
+  }
+
+  Future<void> clearAllBrowsingData() async {
+    await clearPrivateData();
+    await clearBookmarks();
   }
 
   void setWebViewController(WebViewController controller) {
@@ -278,8 +346,12 @@ class BrowserService extends ChangeNotifier {
       return 'https://$url';
     }
 
-    final encodedQuery = Uri.encodeComponent(url);
-    return 'https://www.google.com/search?q=$encodedQuery';
+    if (_searchEngine == 'google') {
+      final query = Uri.encodeComponent(url);
+      return 'https://www.google.com/search?q=$query';
+    }
+
+    return DomainHelper.getNavigwizSearchUrl(url);
   }
 
   Future<void> goBack() async {

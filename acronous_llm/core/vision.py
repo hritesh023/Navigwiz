@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class VisionEngine:
     """LLM-powered vision analysis (from Acronous AI).
-    
-    Uses cloud vision models (OpenRouter, OpenAI, etc.) for detailed image understanding.
+
+    Uses Acronous Oracle or OpenAI-compatible vision models for detailed image understanding.
     Falls back to local ViT classification if no API key is available.
     """
     def __init__(self, config):
@@ -23,23 +23,23 @@ class VisionEngine:
         self._init_llm_vision()
 
     def _init_llm_vision(self):
-        """Initialize LLM-based vision via OpenAI-compatible API (OpenRouter, etc.)."""
+        """Initialize LLM-based vision via Acronous Oracle or OpenAI-compatible API."""
         import os
         api_key = os.getenv("ACRONOUS_LLM_API_KEY", "")
-        provider = os.getenv("ACRONOUS_LLM_PROVIDER", "openai").lower()
-        if not api_key:
-            return
+        provider = os.getenv("ACRONOUS_LLM_PROVIDER", "oracle").lower()
         try:
             from openai import OpenAI
-            if provider == "openrouter":
-                base_url = os.getenv("ACRONOUS_LLM_API_URL", "https://openrouter.ai/api/v1")
-                self._vision_model = os.getenv("ACRONOUS_VISION_MODEL", "google/gemini-2.5-flash-lite")
+            if provider == "oracle":
+                base_url = os.getenv("ACRONOUS_LLM_API_URL", "https://oracle.acronous.com")
+                self._vision_model = os.getenv("ACRONOUS_VISION_MODEL", "qwen2.5:14b")
             elif provider in ("openai", "groq", "together"):
                 base_url = os.getenv("ACRONOUS_LLM_API_URL", "https://api.openai.com/v1")
                 self._vision_model = os.getenv("ACRONOUS_VISION_MODEL", "gpt-4o-mini")
+                if not api_key:
+                    return
             else:
                 return
-            self._llm_client = OpenAI(api_key=api_key, base_url=base_url)
+            self._llm_client = OpenAI(api_key=api_key or "acronous-oracle", base_url=base_url)
             logger.info(f"[VISION] LLM vision initialized (model: {self._vision_model})")
         except Exception as e:
             logger.warning(f"[VISION] LLM vision init failed: {e}")

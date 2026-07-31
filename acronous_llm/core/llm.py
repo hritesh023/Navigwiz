@@ -5,15 +5,20 @@ import os
 logger = logging.getLogger(__name__)
 
 CLOUD_PROVIDERS = {
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-        "default_model": "gpt-4o-mini",
+    "oracle": {
+        "base_url": "https://oracle.acronous.com",
+        "models": ["qwen2.5:14b"],
+        "default_model": "qwen2.5:14b",
     },
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
         "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
         "default_model": "llama-3.3-70b-versatile",
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+        "default_model": "gpt-4o-mini",
     },
     "together": {
         "base_url": "https://api.together.xyz/v1",
@@ -24,16 +29,6 @@ CLOUD_PROVIDERS = {
         "base_url": "https://api.anthropic.com/v1",
         "models": ["claude-sonnet-4-20250514", "claude-3-5-haiku-latest"],
         "default_model": "claude-sonnet-4-20250514",
-    },
-    "openrouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "models": [
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "deepseek/deepseek-chat:free",
-            "google/gemini-2.5-flash-lite-preview-02-15:free",
-            "nvidia/nemotron-nano-12b-v2-vl:free",
-        ],
-        "default_model": "meta-llama/llama-3.3-70b-instruct:free",
     },
 }
 
@@ -48,25 +43,36 @@ class LocalLLM:
 
     def _init_cloud(self):
         api_key = os.getenv("ACRONOUS_LLM_API_KEY", "")
-        provider = os.getenv("ACRONOUS_LLM_PROVIDER", "openai").lower()
+        provider = os.getenv("ACRONOUS_LLM_PROVIDER", "oracle").lower()
+        if provider == "oracle":
+            # Acronous Oracle runs locally and does not require an API key.
+            try:
+                from openai import OpenAI
+                info = CLOUD_PROVIDERS["oracle"]
+                base_url = os.getenv("ACRONOUS_LLM_API_URL", info["base_url"])
+                self._openai_client = OpenAI(
+                    api_key=api_key or "acronous-oracle",
+                    base_url=base_url,
+                )
+                self.available_models = info["models"]
+                if self.config.LLM_MODEL not in self.available_models:
+                    self.config.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", info["default_model"])
+                self.backend = "openai_compat"
+                logger.info(f"[LLM INIT] Oracle initialized (model: {self.config.LLM_MODEL})")
+                return
+            except Exception as e:
+                logger.error(f"[LLM INIT] Failed to initialize oracle: {type(e).__name__}: {e}")
         if not api_key:
             logger.warning(f"[LLM INIT] No API key found for provider '{provider}'. Set ACRONOUS_LLM_API_KEY environment variable.")
             return
-        if provider in ("openai", "groq", "together", "openrouter"):
+        if provider in ("openai", "groq", "together"):
             try:
                 from openai import OpenAI
                 info = CLOUD_PROVIDERS.get(provider, CLOUD_PROVIDERS["openai"])
                 base_url = os.getenv("ACRONOUS_LLM_API_URL", info["base_url"])
-                extra_headers = {}
-                if provider == "openrouter":
-                    extra_headers = {
-                        "HTTP-Referer": os.getenv("ACRONOUS_APP_URL", "https://navigwiz.app"),
-                        "X-Title": "Navigwiz AI",
-                    }
                 self._openai_client = OpenAI(
                     api_key=api_key,
                     base_url=base_url,
-                    default_headers=extra_headers if extra_headers else None,
                 )
                 self.available_models = info["models"]
                 if self.config.LLM_MODEL not in self.available_models:

@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import '../providers/workspace_provider.dart';
 import '../models/workspace.dart';
 import '../models/attachment.dart';
+import '../services/ai_service.dart';
 
 class WorkspaceScreen extends StatefulWidget {
   const WorkspaceScreen({super.key});
@@ -210,6 +211,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       );
     }
     if (text.isNotEmpty) {
+      final hasAttachments = _pendingAttachments.isNotEmpty;
       provider.addItemToWorkspace(
         provider.activeWorkspace!.id,
         WorkspaceItem(
@@ -219,12 +221,33 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           type: 'note',
         ),
       );
+      if (!hasAttachments) {
+        _askAi(provider.activeWorkspace!.id, text);
+      }
     }
 
     setState(() {
       _pendingAttachments = [];
       _messageController.clear();
     });
+  }
+
+  Future<void> _askAi(String workspaceId, String message) async {
+    final aiService = Provider.of<AIService>(context, listen: false);
+    final provider = Provider.of<WorkspaceProvider>(context, listen: false);
+    final result = await aiService.sendAgentMessage(message);
+    if (!mounted || !provider.workspaceIds.contains(workspaceId)) {
+      return;
+    }
+    provider.addItemToWorkspace(
+      workspaceId,
+      WorkspaceItem(
+        id: 'item_${DateTime.now().millisecondsSinceEpoch}',
+        title: 'AI Reply',
+        content: result.response,
+        type: 'note',
+      ),
+    );
   }
 
   void _addWorkspaceTab() {
@@ -375,6 +398,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           return Column(
             children: [
               _buildWorkspaceTabs(wp, isDark),
+              if (wp.activeWorkspace != null)
+                _buildWorkspaceHeader(wp.activeWorkspace!, isDark),
               Expanded(
                 child: wp.activeWorkspace == null
                     ? Center(child: Text('Select a workspace tab',
@@ -393,7 +418,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildWorkspaceTabs(WorkspaceProvider wp, bool isDark) {
     return Container(
-      height: 44,
+      height: 46,
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -405,15 +430,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: wp.workspaces.length + 1,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         itemBuilder: (ctx, i) {
           if (i == wp.workspaces.length) {
             return Center(
-              child: IconButton(
-                icon: Icon(Icons.add_rounded,
-                  color: Theme.of(context).colorScheme.primary),
-                onPressed: _addWorkspaceTab,
-                tooltip: 'New workspace tab',
+              child: Container(
+                margin: const EdgeInsets.only(left: 6),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: IconButton(
+                  icon: Icon(Icons.add_rounded,
+                    color: Theme.of(context).colorScheme.primary),
+                  onPressed: _addWorkspaceTab,
+                  tooltip: 'New workspace tab',
+                  visualDensity: VisualDensity.compact,
+                ),
               ),
             );
           }
@@ -421,17 +454,24 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           final isActive = wp.activeWorkspace?.id == ws.id;
           return GestureDetector(
             onTap: () => wp.setActiveWorkspace(ws.id),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(right: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
                 color: isActive
-                    ? Theme.of(context).colorScheme.primaryContainer
+                    ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.55)
                     : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
                 border: isActive
-                    ? Border.all(
-                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3))
+                    ? Border(
+                        left: BorderSide(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)),
+                        right: BorderSide(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)),
+                        top: BorderSide(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)),
+                      )
                     : null,
               ),
               child: Row(
@@ -465,19 +505,103 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
+  Widget _buildWorkspaceHeader(Workspace workspace, bool isDark) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [
+                  const Color(0xFF1A237E).withValues(alpha: 0.55),
+                  const Color(0xFF4A148C).withValues(alpha: 0.55),
+                ]
+              : [
+                  const Color(0xFF4F46E5).withValues(alpha: 0.10),
+                  const Color(0xFF9333EA).withValues(alpha: 0.10),
+                ],
+        ),
+        border: Border.all(
+          color: const Color(0xFF4F46E5).withValues(alpha: isDark ? 0.3 : 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: const Color(0xFF4F46E5),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.auto_awesome, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(workspace.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  )),
+                const SizedBox(height: 2),
+                Text(
+                  '${workspace.items.length} item${workspace.items.length == 1 ? '' : 's'}  |  Ask AI to process files, links and notes',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildWorkspaceContent(Workspace workspace) {
     if (workspace.items.isEmpty) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.inbox_outlined, size: 48, color: Colors.grey[400]),
-            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: isDark
+                      ? [
+                          const Color(0xFF1A237E).withValues(alpha: 0.55),
+                          const Color(0xFF4A148C).withValues(alpha: 0.55),
+                        ]
+                      : [
+                          const Color(0xFF4F46E5).withValues(alpha: 0.12),
+                          const Color(0xFF9333EA).withValues(alpha: 0.12),
+                        ],
+                ),
+              ),
+              child: const Icon(Icons.inbox_outlined, size: 44, color: Color(0xFF4F46E5)),
+            ),
+            const SizedBox(height: 16),
             Text('No items yet',
-              style: TextStyle(fontSize: 16, color: Colors.grey[500])),
-            const SizedBox(height: 4),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurface)),
+            const SizedBox(height: 6),
             Text('Attach files or type below to get started',
-              style: TextStyle(fontSize: 13, color: Colors.grey[400])),
+              style: TextStyle(fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
           ],
         ),
       );
@@ -492,15 +616,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildItemCard(WorkspaceItem item) {
     IconData icon;
+    Color color = Theme.of(context).colorScheme.primary;
     switch (item.type) {
-      case 'image': icon = Icons.image_outlined; break;
-      case 'folder': icon = Icons.folder_outlined; break;
-      case 'video': icon = Icons.videocam_outlined; break;
-      case 'audio': icon = Icons.audiotrack_outlined; break;
-      case 'link': icon = Icons.link_outlined; break;
-      case 'file': icon = Icons.insert_drive_file_outlined; break;
-      case 'note': icon = Icons.notes_outlined; break;
-      default: icon = Icons.description_outlined;
+      case 'image': icon = Icons.image_outlined; color = const Color(0xFF8B5CF6); break;
+      case 'folder': icon = Icons.folder_outlined; color = const Color(0xFFF59E0B); break;
+      case 'video': icon = Icons.videocam_outlined; color = const Color(0xFFEF4444); break;
+      case 'audio': icon = Icons.audiotrack_outlined; color = const Color(0xFF10B981); break;
+      case 'link': icon = Icons.link_outlined; color = const Color(0xFF3B82F6); break;
+      case 'file': icon = Icons.insert_drive_file_outlined; color = const Color(0xFF0EA5E9); break;
+      case 'note': icon = Icons.notes_outlined; color = const Color(0xFF8B5CF6); break;
+      default: icon = Icons.description_outlined; color = const Color(0xFF64748B);
     }
 
     return Card(
@@ -512,10 +637,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
+            color: color.withValues(alpha: 0.13),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(icon, size: 22, color: Theme.of(context).colorScheme.primary),
+          child: Icon(icon, size: 22, color: color),
         ),
         title: Text(item.title,
           style: TextStyle(fontWeight: FontWeight.w500,

@@ -18,19 +18,33 @@ class ResearchSource {
 
 class ResearchFinding {
   final String id;
+  final String title;
   final String finding;
   final String source;
+  final List<String> sources;
   final double confidence;
 
-  ResearchFinding({required this.id, required this.finding, required this.source, this.confidence = 0.8});
+  ResearchFinding({
+    required this.id,
+    required this.finding,
+    required this.source,
+    this.title = '',
+    this.sources = const [],
+    this.confidence = 0.8,
+  });
 
   Map<String, dynamic> toJson() => {
-    'id': id, 'finding': finding, 'source': source, 'confidence': confidence,
+    'id': id, 'title': title, 'finding': finding, 'source': source,
+    'sources': sources, 'confidence': confidence,
   };
 
   factory ResearchFinding.fromJson(Map<String, dynamic> json) => ResearchFinding(
-    id: json['id'] ?? '', finding: json['finding'] ?? '',
-    source: json['source'] ?? '', confidence: (json['confidence'] ?? 0).toDouble(),
+    id: json['id'] ?? '',
+    title: json['title'] ?? '',
+    finding: json['finding'] ?? '',
+    source: json['source'] ?? '',
+    sources: List<String>.from(json['sources'] ?? const []),
+    confidence: (json['confidence'] ?? 0).toDouble(),
   );
 }
 

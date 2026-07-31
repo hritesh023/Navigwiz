@@ -6,6 +6,7 @@ import '../widgets/saturn_logo.dart';
 class BrowserTabBar extends StatelessWidget {
   final List<BrowserTab> tabs;
   final int activeTabIndex;
+  final bool isPrivate;
   final Function(int) onTabSelected;
   final Function(String) onTabClosed;
   final VoidCallback onNewTab;
@@ -14,6 +15,7 @@ class BrowserTabBar extends StatelessWidget {
     super.key,
     required this.tabs,
     required this.activeTabIndex,
+    this.isPrivate = false,
     required this.onTabSelected,
     required this.onTabClosed,
     required this.onNewTab,
@@ -24,7 +26,9 @@ class BrowserTabBar extends StatelessWidget {
     return Container(
       height: 36,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: isPrivate
+            ? const Color(0xFF263238)
+            : Theme.of(context).colorScheme.surface,
         border: Border(
           bottom: BorderSide(
             color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
@@ -45,11 +49,12 @@ class BrowserTabBar extends StatelessWidget {
                   child: _TabItem(
                     tab: tabs[index],
                     isActive: index == activeTabIndex,
+                    isPrivate: isPrivate,
                     onTap: () => onTabSelected(index),
                     onClose: () => onTabClosed(tabs[index].id),
                   ),
                 ),
-              _NewTabButton(onPressed: onNewTab),
+              _NewTabButton(onPressed: onNewTab, isPrivate: isPrivate),
               const SizedBox(width: 8),
             ],
           ),
@@ -61,8 +66,9 @@ class BrowserTabBar extends StatelessWidget {
 
 class _NewTabButton extends StatelessWidget {
   final VoidCallback onPressed;
+  final bool isPrivate;
 
-  const _NewTabButton({required this.onPressed});
+  const _NewTabButton({required this.onPressed, this.isPrivate = false});
 
   @override
   Widget build(BuildContext context) {
@@ -71,10 +77,14 @@ class _NewTabButton extends StatelessWidget {
       height: 32,
       margin: const EdgeInsets.only(left: 4, top: 2),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainer,
+        color: isPrivate
+            ? const Color(0xFF37474F)
+            : Theme.of(context).colorScheme.surfaceContainer,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.42),
+          color: isPrivate
+              ? Colors.white.withValues(alpha: 0.15)
+              : Theme.of(context).dividerColor.withValues(alpha: 0.42),
           width: 0.5,
         ),
       ),
@@ -83,7 +93,9 @@ class _NewTabButton extends StatelessWidget {
         icon: Icon(
           Icons.add,
           size: 17,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          color: isPrivate
+              ? Colors.white.withValues(alpha: 0.9)
+              : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
         padding: EdgeInsets.zero,
         tooltip: 'New Tab',
@@ -95,6 +107,7 @@ class _NewTabButton extends StatelessWidget {
 class _TabItem extends StatelessWidget {
   final BrowserTab tab;
   final bool isActive;
+  final bool isPrivate;
   final VoidCallback onTap;
   final VoidCallback onClose;
 
@@ -103,6 +116,7 @@ class _TabItem extends StatelessWidget {
     required this.isActive,
     required this.onTap,
     required this.onClose,
+    this.isPrivate = false,
   });
 
   @override
@@ -117,15 +131,19 @@ class _TabItem extends StatelessWidget {
         height: 32,
         decoration: BoxDecoration(
           color: isActive
-              ? Theme.of(context).colorScheme.surface
-              : Theme.of(context).colorScheme.surfaceContainer,
+              ? (isPrivate ? const Color(0xFF455A64) : Theme.of(context).colorScheme.surface)
+              : (isPrivate
+                  ? const Color(0xFF263238)
+                  : Theme.of(context).colorScheme.surfaceContainer),
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(8),
             topRight: Radius.circular(8),
           ),
           border: Border.all(
             color: isActive
-                ? Theme.of(context).dividerColor.withValues(alpha: 0.8)
+                ? (isPrivate
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : Theme.of(context).dividerColor.withValues(alpha: 0.8))
                 : Theme.of(context).dividerColor.withValues(alpha: 0.3),
             width: isActive ? 1 : 0.5,
           ),
@@ -147,12 +165,16 @@ class _TabItem extends StatelessWidget {
             SizedBox(
               width: 16,
               height: 16,
-              child: tab.url.isEmpty || tab.url == 'about:blank'
-                  ? const SaturnLogo(size: 14)
-                  : DomainHelper.getFaviconForUrl(
-                      tab.url,
-                      size: 14.0,
-                    ),
+              child: isPrivate
+                  ? const Icon(Icons.visibility_off,
+                      size: 14,
+                      color: Color(0xFF90A4AE))
+                  : tab.url.isEmpty || tab.url == 'about:blank'
+                      ? const SaturnLogo(size: 14)
+                      : DomainHelper.getFaviconForUrl(
+                          tab.url,
+                          size: 14.0,
+                        ),
             ),
 
             const SizedBox(width: 6),
@@ -165,8 +187,12 @@ class _TabItem extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   color: isActive
-                      ? Theme.of(context).colorScheme.onSurface
-                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ? (isPrivate
+                          ? Colors.white
+                          : Theme.of(context).colorScheme.onSurface)
+                      : (isPrivate
+                          ? Colors.white.withValues(alpha: 0.7)
+                          : Theme.of(context).colorScheme.onSurfaceVariant),
                   fontWeight: isActive ? FontWeight.w500 : FontWeight.w400,
                   letterSpacing: 0,
                 ),
@@ -207,9 +233,11 @@ class _TabItem extends StatelessWidget {
           icon: Icon(
             Icons.close,
             size: 12,
-            color: isActive
-                ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)
-                : Theme.of(context).colorScheme.onSurfaceVariant,
+            color: isPrivate
+                ? Colors.white.withValues(alpha: 0.7)
+                : isActive
+                    ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
           ),
           padding: EdgeInsets.zero,
           tooltip: 'Close tab',

@@ -4,7 +4,7 @@ class AppConfig {
   // API Configuration - only via environment, no hardcoded keys
   static const String _workerUrl = String.fromEnvironment(
     'WORKER_URL',
-    defaultValue: '',
+    defaultValue: 'https://navigwiz-ai.acronous.com',
   );
 
   // App Configuration
@@ -18,8 +18,8 @@ class AppConfig {
 
   // Fetching
   static const int maxConcurrentRequests = 4;
-  static const Duration searchTimeout = Duration(seconds: 10);
-  static const Duration aiResponseTimeout = Duration(seconds: 30);
+  static const Duration searchTimeout = Duration(seconds: 15);
+  static const Duration aiResponseTimeout = Duration(seconds: 180);
 
   // UI Settings
   static const bool enableAnimations = true;

@@ -4,9 +4,9 @@ import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/browser_service.dart';
 import '../services/theme_service.dart';
-import '../services/central_auth_service.dart';
 import '../utils/domain_helper.dart';
 import '../providers/auth_provider.dart';
+import '../providers/settings_provider.dart';
 import '../providers/workspace_provider.dart';
 import '../providers/memory_provider.dart';
 import '../widgets/address_bar.dart';
@@ -17,6 +17,7 @@ import '../widgets/saturn_logo.dart';
 import '../widgets/acronous_logo.dart';
 import '../widgets/navigwiz_search_results.dart';
 import 'acronous_chat_page.dart';
+import 'settings_screen.dart';
 import 'workspace_screen.dart';
 import 'research_screen.dart';
 
@@ -38,6 +39,48 @@ class _BrowserScreenState extends State<BrowserScreen> {
   bool _showWorkspacePanel = false;
   WebViewController? _webViewController;
   final TextEditingController _homeSearchController = TextEditingController();
+
+  static const String _adBlockScript = r'''
+(() => {
+  const selectors = [
+    'ins.adsbygoogle',
+    '.adsbygoogle',
+    '[id^="google_ads_"]',
+    '[id*="ad-slot"]',
+    '.ad-banner',
+    '.advertisement',
+    '.advert',
+    '.ads',
+    '[aria-label="Ads"]',
+    '[aria-label="Advertisement"]',
+    '[class*="ad-container"]',
+    '[class*="ad-widget"]',
+    '[data-ad-slot]',
+    '[data-ad-client]',
+  ];
+  const block = () => {
+    try {
+      for (const s of selectors) {
+        document.querySelectorAll(s).forEach(el => el.remove());
+      }
+    } catch (e) {}
+  };
+  const start = () => {
+    block();
+    if (document.body) {
+      new MutationObserver(block).observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    }
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();
+''';
 
   @override
   void initState() {
@@ -63,6 +106,23 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   void _initializeBrowser() {
+    _createWebViewController();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final browserService =
+          Provider.of<BrowserService>(context, listen: false);
+      if (_webViewController != null) {
+        browserService.setWebViewController(_webViewController!);
+      }
+      if (browserService.tabs.isEmpty) {
+        browserService.createNewTab();
+      }
+    });
+  }
+
+  void _createWebViewController() {
+    final adBlockEnabled =
+        Provider.of<SettingsProvider>(context, listen: false).adBlockEnabled;
     _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
@@ -104,11 +164,16 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 progress: 100,
               );
             }
-            Provider.of<MemoryProvider>(context, listen: false).remember(
-              type: 'visit',
-              content: 'Visited: $url',
-              url: url,
-            );
+            if (adBlockEnabled) {
+              _webViewController?.runJavaScript(_adBlockScript);
+            }
+            if (!browserService.isPrivateMode) {
+              Provider.of<MemoryProvider>(context, listen: false).remember(
+                type: 'visit',
+                content: 'Visited: $url',
+                url: url,
+              );
+            }
           },
           onWebResourceError: (WebResourceError error) {
             debugPrint(
@@ -116,17 +181,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
           },
         ),
       );
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final browserService =
-          Provider.of<BrowserService>(context, listen: false);
-      if (_webViewController != null) {
-        browserService.setWebViewController(_webViewController!);
-      }
-      if (browserService.tabs.isEmpty) {
-        browserService.createNewTab();
-      }
-    });
   }
 
   @override
@@ -142,6 +196,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
             builder: (_, browserService, __) => BrowserTabBar(
               tabs: browserService.tabs,
               activeTabIndex: browserService.activeTabIndex,
+              isPrivate: browserService.isPrivateMode,
               onTabSelected: (index) => browserService.switchToTab(index),
               onTabClosed: (tabId) => browserService.closeTab(tabId),
               onNewTab: () => browserService.createNewTab(),
@@ -152,6 +207,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
               url: browserService.activeTab?.url ?? '',
               isLoading: browserService.activeTab?.isLoading ?? false,
               progress: browserService.activeTab?.progress ?? 0,
+              isPrivate: browserService.isPrivateMode,
               onUrlSubmitted: (url) => browserService.navigateToUrl(url),
               onBackPressed: () => browserService.goBack(),
               onForwardPressed: () => browserService.goForward(),
@@ -272,8 +328,134 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   Widget _buildEmptyState() {
     final themeService = Provider.of<ThemeService>(context);
+    final isPrivate =
+        Provider.of<BrowserService>(context).isPrivateMode;
     final hasImageBackground = themeService.backgroundImageBytes != null &&
         !themeService.hasVideoBackground;
+
+    final content = Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isPrivate) ...[
+              _buildPrivateModeNotice(),
+              const SizedBox(height: 22),
+            ],
+            if (themeService.hasVideoBackground) ...[
+              _buildLiveWallpaperHint(themeService),
+              const SizedBox(height: 22),
+            ],
+            const SaturnLogo(size: 100, showGlow: true),
+            const SizedBox(height: 20),
+            Text(
+              'Navigwiz',
+              style: TextStyle(
+                fontSize: 38,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Consumer<AuthProvider>(
+              builder: (context, auth, _) {
+                if (auth.isSignedIn && auth.userName != null && auth.userName!.isNotEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      'Welcome, ${auth.userName}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  );
+                }
+                return Text(
+                  'AI-Powered Internet Operating System',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .surface
+                      .withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color:
+                        Theme.of(context).dividerColor.withValues(alpha: 0.3),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .shadow
+                          .withValues(alpha: 0.18),
+                      blurRadius: 22,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.search,
+                        color:
+                            Theme.of(context).colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextField(
+                        controller: _homeSearchController,
+                        autofocus: true,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: _submitHomeSearch,
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'What do you want to do?',
+                          hintStyle: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                          ),
+                          border: InputBorder.none,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Search',
+                      onPressed: () =>
+                          _submitHomeSearch(_homeSearchController.text),
+                      icon: const Icon(Icons.arrow_forward),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            _buildQuickAccessButtons(),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -286,136 +468,66 @@ class _BrowserScreenState extends State<BrowserScreen> {
             Theme.of(context).colorScheme.surfaceContainerLowest,
           ],
         ),
-        image: hasImageBackground
-            ? DecorationImage(
-                image: MemoryImage(themeService.backgroundImageBytes!),
-                fit: BoxFit.cover,
-                colorFilter: ColorFilter.mode(
-                  Colors.black
-                      .withValues(alpha: themeService.isDarkMode ? 0.55 : 0.28),
-                  BlendMode.darken,
-                ),
-              )
-            : null,
       ),
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (themeService.hasVideoBackground) ...[
-                _buildLiveWallpaperHint(themeService),
-                const SizedBox(height: 22),
-              ],
-              const SaturnLogo(size: 100, showGlow: true),
-              const SizedBox(height: 20),
-              Text(
-                'Navigwiz',
-                style: TextStyle(
-                  fontSize: 38,
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Consumer<AuthProvider>(
-                builder: (context, auth, _) {
-                  if (auth.isSignedIn && auth.userName != null && auth.userName!.isNotEmpty) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        'Welcome, ${auth.userName}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w500,
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                      ),
-                    );
-                  }
-                  return Text(
-                    'AI-Powered Internet Operating System',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 720),
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surface
-                        .withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color:
-                          Theme.of(context).dividerColor.withValues(alpha: 0.3),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .shadow
-                            .withValues(alpha: 0.18),
-                        blurRadius: 22,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.search,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: TextField(
-                          controller: _homeSearchController,
-                          autofocus: true,
-                          textInputAction: TextInputAction.search,
-                          onSubmitted: _submitHomeSearch,
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Theme.of(context).colorScheme.onSurface,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: 'What do you want to do?',
-                            hintStyle: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Search',
-                        onPressed: () =>
-                            _submitHomeSearch(_homeSearchController.text),
-                        icon: const Icon(Icons.arrow_forward),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              _buildQuickAccessButtons(),
-              const SizedBox(height: 24),
-            ],
-          ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (hasImageBackground)
+            Image.memory(
+              themeService.backgroundImageBytes!,
+              fit: BoxFit.cover,
+              opacity: isPrivate
+                  ? const AlwaysStoppedAnimation(0.35)
+                  : const AlwaysStoppedAnimation(0.55),
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
+          content,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPrivateModeNotice() {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 480),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF37474F).withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
         ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.visibility_off, color: Colors.white, size: 20),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  "You've gone incognito",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Tabs, history, cookies and site data from this window are not saved.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -483,6 +595,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
     Provider.of<BrowserService>(context, listen: false).navigateToUrl(query);
   }
 
+  Future<void> _togglePrivateMode() async {
+    final browserService =
+        Provider.of<BrowserService>(context, listen: false);
+    final enabling = !browserService.isPrivateMode;
+    browserService.setPrivateMode(enabling);
+    if (!kIsWeb && widget.enableEmbeddedWebView && _webViewController != null) {
+      _createWebViewController();
+      Provider.of<BrowserService>(context, listen: false)
+          .setWebViewController(_webViewController!);
+    }
+  }
+
   Widget _buildTitleBar(ThemeService themeService) {
     return Container(
       height: 32,
@@ -522,6 +646,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
           _buildTitleButton(Icons.workspaces_outline, 'Workspaces', () {
             Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const WorkspaceScreen()));
+          }),
+          const SizedBox(width: 4),
+          Consumer<BrowserService>(
+            builder: (context, browserService, _) => _buildPrivateModeButton(
+              isActive: browserService.isPrivateMode,
+              onTap: _togglePrivateMode,
+            ),
+          ),
+          const SizedBox(width: 4),
+          _buildTitleButton(Icons.settings_outlined, 'Settings', () {
+            Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()));
           }),
           const Spacer(),
           Consumer<AuthProvider>(
@@ -563,6 +699,48 @@ class _BrowserScreenState extends State<BrowserScreen> {
                     fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrivateModeButton({
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    final theme = Theme.of(context);
+    final tint = isActive
+        ? const Color(0xFF37474F)
+        : theme.colorScheme.surfaceContainer;
+    final fg = isActive
+        ? Colors.white
+        : theme.colorScheme.onSurfaceVariant;
+    return Material(
+      color: Colors.transparent,
+      child: Tooltip(
+        message: isActive ? 'Exit Incognito' : 'New Incognito Window',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: tint,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(isActive ? Icons.visibility_off : Icons.visibility,
+                    size: 12, color: fg),
+                const SizedBox(width: 4),
+                Text(
+                  isActive ? 'Incognito' : 'Private',
+                  style: TextStyle(fontSize: 11, color: fg),
+                ),
+              ],
+            ),
           ),
         ),
       ),

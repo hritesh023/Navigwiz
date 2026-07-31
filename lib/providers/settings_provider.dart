@@ -8,12 +8,19 @@ class SettingsProvider extends ChangeNotifier {
   String _userDisplayName = '';
   String _userEmail = '';
   List<Map<String, String>> _extensions = [];
+  String _searchEngine = 'navigwiz';
+  bool _adBlockEnabled = false;
+  String _homepageUrl = '';
 
   bool get isDarkMode => _isDarkMode;
   String get aiAssistantName => _aiAssistantName;
   String get userDisplayName => _userDisplayName;
   String get userEmail => _userEmail;
   List<Map<String, String>> get extensions => _extensions;
+  String get searchEngine => _searchEngine;
+  bool get adBlockEnabled => _adBlockEnabled;
+  String get homepageUrl => _homepageUrl;
+  bool get useGoogleSearch => _searchEngine == 'google';
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
@@ -21,6 +28,9 @@ class SettingsProvider extends ChangeNotifier {
     _aiAssistantName = prefs.getString('ai_assistant_name') ?? 'Navigwiz';
     _userDisplayName = prefs.getString('user_display_name') ?? '';
     _userEmail = prefs.getString('user_email') ?? '';
+    _searchEngine = prefs.getString('search_engine') ?? 'navigwiz';
+    _adBlockEnabled = prefs.getBool('ad_block_enabled') ?? false;
+    _homepageUrl = prefs.getString('homepage_url') ?? '';
 
     final extJson = prefs.getString('extensions');
     if (extJson != null) {
@@ -28,6 +38,27 @@ class SettingsProvider extends ChangeNotifier {
       _extensions = list.map((e) => Map<String, String>.from(e)).toList();
     }
 
+    notifyListeners();
+  }
+
+  Future<void> setSearchEngine(String engine) async {
+    _searchEngine = engine;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('search_engine', engine);
+    notifyListeners();
+  }
+
+  Future<void> setAdBlockEnabled(bool value) async {
+    _adBlockEnabled = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('ad_block_enabled', value);
+    notifyListeners();
+  }
+
+  Future<void> setHomepageUrl(String value) async {
+    _homepageUrl = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('homepage_url', value);
     notifyListeners();
   }
 

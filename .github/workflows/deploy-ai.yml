@@ -13,7 +13,7 @@ on:
     types: [ published ]
 
 env:
-  WORKER_NAME: acronous-ai
+  WORKER_NAME: navigwiz-ai
   DIRECTORY: ai-worker
 
 jobs:
@@ -89,12 +89,12 @@ jobs:
     - name: Verify deployment
       run: |
         cd ${{ env.DIRECTORY }}
-        curl -f https://ai.acronous.com/health || echo "Health check failed - may be expected if worker is still deploying"
+        curl -f https://navigwiz-ai.acronous.com/health || echo "Health check failed - may be expected if worker is still deploying"
         
     - name: Update Acronous landing page config
       run: |
         cd Navigwiz
-        echo "AI worker deployed to ai.acronous.com"
+        echo "AI worker deployed to navigwiz-ai.acronous.com"
       env:
         CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
 

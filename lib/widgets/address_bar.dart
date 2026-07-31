@@ -12,6 +12,7 @@ class AddressBar extends StatefulWidget {
   final VoidCallback onReloadPressed;
   final bool canGoBack;
   final bool canGoForward;
+  final bool isPrivate;
   final List<Widget> trailingActions;
 
   const AddressBar({
@@ -25,6 +26,7 @@ class AddressBar extends StatefulWidget {
     required this.onReloadPressed,
     this.canGoBack = false,
     this.canGoForward = false,
+    this.isPrivate = false,
     this.trailingActions = const [],
   });
 
@@ -106,6 +108,11 @@ class _AddressBarState extends State<AddressBar> {
               ),
 
               const SizedBox(width: 12),
+
+              if (widget.isPrivate) ...[
+                _buildIncognitoBadge(),
+                const SizedBox(width: 8),
+              ],
 
               // Modern address field
               Expanded(
@@ -284,6 +291,31 @@ class _AddressBarState extends State<AddressBar> {
                 ),
           padding: EdgeInsets.zero,
         ),
+      ),
+    );
+  }
+
+  Widget _buildIncognitoBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF37474F),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.visibility_off, size: 12, color: Colors.white),
+          SizedBox(width: 4),
+          Text(
+            'Incognito',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }

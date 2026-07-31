@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/agentic_chat_view.dart';
 
 class AcronousChatPage extends StatelessWidget {
   const AcronousChatPage({super.key});
@@ -10,26 +11,16 @@ class AcronousChatPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Acronous AI Chat'),
+        title: const Text('Navigwiz AI Chat'),
         backgroundColor: theme.colorScheme.surface,
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.auto_awesome, size: 64, color: theme.colorScheme.primary.withValues(alpha: 0.5)),
-            const SizedBox(height: 16),
-            Text(
-              'AI Chat',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Chat features coming soon',
-              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
         ),
+      ),
+      body: const AgenticChatView(
+        autoFocus: true,
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
       ),
     );
   }

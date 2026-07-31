@@ -52,6 +52,11 @@ class ResearchProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearActiveObjective() {
+    _activeObjective = null;
+    notifyListeners();
+  }
+
   Future<void> startResearch(String objective, {String category = 'general'}) async {
     final task = TaskObjective(
       id: 'research_${DateTime.now().millisecondsSinceEpoch}',
@@ -64,6 +69,75 @@ class ResearchProvider extends ChangeNotifier {
     _error = null;
     _currentProgress = 'Starting research...';
     notifyListeners();
+
+    try {
+      _currentProgress = 'Planning research strategy...';
+      notifyListeners();
+
+      final agentResult = await _aiService.runResearchAgent(objective);
+      final research = agentResult.research;
+
+      if (research != null || agentResult.response.isNotEmpty) {
+        final references = (research?.references ?? const [])
+            .map((r) => ResearchSource(
+                  title: r.title,
+                  url: r.url,
+                  snippet: r.snippet,
+                ))
+            .toList();
+
+        final findings = research == null
+            ? <ResearchFinding>[]
+            : research.keyFindings.asMap().entries.map((e) {
+                final finding = e.value;
+                final src = finding.sources.isNotEmpty
+                    ? finding.sources.first
+                    : (e.key < references.length
+                        ? references[e.key].url
+                        : (references.isNotEmpty ? references.first.url : ''));
+                return ResearchFinding(
+                  id: 'finding_${e.key}',
+                  title: finding.title,
+                  finding: finding.finding.isNotEmpty
+                      ? finding.finding
+                      : finding.title,
+                  source: src,
+                  sources: finding.sources,
+                );
+              }).toList();
+
+        final report = ResearchReport(
+          id: 'report_${DateTime.now().millisecondsSinceEpoch}',
+          query: objective,
+          executiveSummary: research?.executiveSummary.isNotEmpty == true
+              ? research!.executiveSummary
+              : agentResult.response,
+          keyFindings: findings,
+          recommendations: research?.recommendations ?? const [],
+          references: references,
+        );
+
+        final index = _objectives.indexWhere((o) => o.id == task.id);
+        if (index != -1) {
+          _objectives[index] = TaskObjective(
+            id: task.id,
+            objective: objective,
+            category: category,
+            status: 'completed',
+            report: report,
+            createdAt: task.createdAt,
+          );
+          _activeObjective = _objectives[index];
+        }
+        _isResearching = false;
+        _currentProgress = 'Research complete';
+        await _save();
+        notifyListeners();
+        return;
+      }
+    } catch (e) {
+      debugPrint('Worker research failed, using fallback: $e');
+    }
 
     try {
       _currentProgress = 'Searching multiple sources...';

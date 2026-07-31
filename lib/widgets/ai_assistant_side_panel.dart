@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'agentic_chat_view.dart';
 
 class AiAssistantSidePanel extends StatelessWidget {
   final VoidCallback onClose;
@@ -54,13 +55,8 @@ class AiAssistantSidePanel extends StatelessWidget {
               ],
             ),
           ),
-          Expanded(
-            child: Center(
-              child: Text(
-                'Ask me anything...',
-                style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-              ),
-            ),
+          const Expanded(
+            child: AgenticChatView(),
           ),
         ],
       ),

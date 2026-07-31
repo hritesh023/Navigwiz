@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/project_provider.dart';
+import '../services/ai_service.dart';
 
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
@@ -16,6 +18,7 @@ class _ProjectScreenState extends State<ProjectScreen> {
   final TextEditingController _nameController = TextEditingController();
   String _selectedType = 'all';
   String _projectRoot = '';
+  bool _generating = false;
 
   @override
   void initState() {
@@ -51,6 +54,12 @@ class _ProjectScreenState extends State<ProjectScreen> {
 
     String content = '';
     switch (template) {
+      case 'txt':
+        content = '$name\n';
+        break;
+      case 'json':
+        content = '{\n  "name": "$name",\n  "version": "1.0.0"\n}\n';
+        break;
       case 'html':
         content = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
@@ -159,6 +168,110 @@ class _ProjectScreenState extends State<ProjectScreen> {
     );
   }
 
+  Future<void> _generateWithAi() async {
+    final descriptionController = TextEditingController();
+    String language = 'html';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Generate with AI',
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: descriptionController,
+                autofocus: true,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  hintText: 'Describe the app or website you want...',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                style:
+                    TextStyle(color: Theme.of(context).colorScheme.onSurface),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: language,
+                decoration: InputDecoration(
+                  labelText: 'Language',
+                  border:
+                      OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'html', child: Text('HTML / CSS / JS')),
+                  DropdownMenuItem(value: 'python', child: Text('Python')),
+                  DropdownMenuItem(value: 'javascript', child: Text('JavaScript')),
+                  DropdownMenuItem(value: 'dart', child: Text('Dart')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => language = v);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                if (descriptionController.text.trim().isNotEmpty) {
+                  Navigator.pop(ctx, true);
+                }
+              },
+              child: const Text('Generate'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _generating = true);
+    final aiService = Provider.of<AIService>(context, listen: false);
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+
+    try {
+      final result = await aiService.generateProjectAgent(
+        descriptionController.text.trim(),
+        language: language,
+      );
+
+      if (!mounted) return;
+      setState(() => _generating = false);
+
+      if (result.project == null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(result.response.isEmpty
+              ? 'Could not generate a project'
+              : result.response),
+          duration: const Duration(seconds: 4),
+        ));
+        return;
+      }
+
+      final savedPath = await provider.saveAgentProject(result.project!);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(kIsWeb
+            ? savedPath
+            : 'Project saved to $savedPath'),
+        duration: const Duration(seconds: 4),
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _generating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not reach the AI service')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -175,6 +288,23 @@ class _ProjectScreenState extends State<ProjectScreen> {
         title: const Text('Projects'),
         centerTitle: true,
         actions: [
+          if (_generating)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.auto_awesome),
+              tooltip: 'Generate with AI',
+              onPressed: _generateWithAi,
+            ),
           IconButton(
             icon: const Icon(Icons.folder_open_outlined),
             tooltip: 'Open project folder',
@@ -192,7 +322,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: _AiBanner(onGenerate: _generateWithAi, generating: _generating),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: Container(
               height: 52,
               decoration: BoxDecoration(
@@ -295,18 +429,48 @@ class _ProjectScreenState extends State<ProjectScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.folder_open_outlined, size: 64, color: Colors.grey[500]),
-                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(22),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: isDark
+                                  ? [
+                                      const Color(0xFF1A237E).withValues(alpha: 0.6),
+                                      const Color(0xFF4A148C).withValues(alpha: 0.6),
+                                    ]
+                                  : [
+                                      const Color(0xFF4F46E5).withValues(alpha: 0.15),
+                                      const Color(0xFF9333EA).withValues(alpha: 0.15),
+                                    ],
+                            ),
+                          ),
+                          child: const Icon(Icons.folder_open_outlined,
+                              size: 44, color: Color(0xFF4F46E5)),
+                        ),
+                        const SizedBox(height: 20),
                         Text('No project files yet',
-                          style: TextStyle(fontSize: 18, color: Colors.grey[500])),
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          )),
                         const SizedBox(height: 8),
                         Text('Tap + to create your first file or folder',
-                          style: TextStyle(fontSize: 14, color: Colors.grey[400])),
+                          style: TextStyle(fontSize: 14, color: Colors.grey[500])),
                         const SizedBox(height: 24),
                         FilledButton.icon(
                           onPressed: _showQuickCreateSheet,
                           icon: const Icon(Icons.add_rounded, size: 20),
                           label: const Text('Create New'),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _generateWithAi,
+                          icon: const Icon(Icons.auto_awesome, size: 18),
+                          label: const Text('Create Project with AI'),
                         ),
                       ],
                     ),
@@ -444,6 +608,101 @@ class _TemplateChip extends StatelessWidget {
       avatar: Icon(icon, size: 18),
       label: Text(label),
       onPressed: onTap,
+    );
+  }
+}
+
+class _AiBanner extends StatelessWidget {
+  final VoidCallback onGenerate;
+  final bool generating;
+
+  const _AiBanner({
+    required this.onGenerate,
+    required this.generating,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [
+                  const Color(0xFF1A237E).withValues(alpha: 0.9),
+                  const Color(0xFF4A148C).withValues(alpha: 0.9),
+                ]
+              : [
+                  const Color(0xFF4F46E5),
+                  const Color(0xFF9333EA),
+                ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF4F46E5).withValues(alpha: isDark ? 0.35 : 0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.auto_awesome, color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Build anything with AI',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Describe an app or website and get a full project folder',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: generating ? null : onGenerate,
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xFF4F46E5),
+              disabledBackgroundColor: Colors.white.withValues(alpha: 0.7),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            ),
+            icon: generating
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4F46E5)),
+                  )
+                : const Icon(Icons.auto_awesome, size: 16),
+            label: Text(generating ? 'Generating' : 'Create Project'),
+          ),
+        ],
+      ),
     );
   }
 }

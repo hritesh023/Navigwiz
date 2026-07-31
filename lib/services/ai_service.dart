@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
+import '../models/agent_response.dart';
 import 'logging_service.dart';
 import 'secure_storage_service.dart';
 
@@ -132,11 +133,6 @@ class AIService extends ChangeNotifier {
       return _cacheSearchResults(cacheKey, fromWorker);
     }
 
-    final fromDdg = await _searchDuckDuckGo(normalizedQuery);
-    if (fromDdg.isNotEmpty) {
-      return _cacheSearchResults(cacheKey, fromDdg);
-    }
-
     return _cacheSearchResults(cacheKey, _fallbackResults(normalizedQuery));
   }
 
@@ -149,50 +145,20 @@ class AIService extends ChangeNotifier {
     final stopwatch = Stopwatch()..start();
 
     List<SearchResult> results = [];
-    List<SearchResult> imageResults = [];
-    List<SearchResult> newsResults = [];
-    List<SearchResult> videoResults = [];
-    List<SearchResult> bookResults = [];
     List<String> suggestions = [];
     List<Infobox> infoboxes = [];
     List<String> answers = [];
     int? resultCount;
 
-    if (category == 'all') {
-      final fullResponse = await _searchFull(query, forceRefresh: forceRefresh);
-      results = fullResponse.results;
-      imageResults = fullResponse.imageResults;
-      newsResults = fullResponse.newsResults;
-      videoResults = fullResponse.videoResults;
-      bookResults = fullResponse.bookResults;
-      suggestions = fullResponse.suggestions;
-      infoboxes = fullResponse.infoboxes;
-      answers = fullResponse.answers;
-      resultCount = fullResponse.resultCount;
-    } else if (category == 'images') {
-      imageResults = await searchImages(query);
-      results = imageResults;
-    } else if (category == 'videos' || category == 'news' || category == 'books') {
-      results = await searchByCategory(query, category);
-      if (category == 'videos') {
-        videoResults = results.where((r) => r.imageUrl != null).toList();
-        imageResults = List.from(videoResults);
-      }
-      if (category == 'books') {
-        bookResults = results;
-      }
-    } else {
-      results = await searchWeb(query, forceRefresh: forceRefresh);
-      try {
-        imageResults = await searchImages(query);
-      } catch (_) {}
-      try {
-        videoResults = await searchByCategory(query, 'videos');
-      } catch (_) {}
-    }
+    final fullResponse = await _searchFull(query, forceRefresh: forceRefresh);
+    results = fullResponse.results;
+    suggestions = fullResponse.suggestions;
+    infoboxes = fullResponse.infoboxes;
+    answers = fullResponse.answers;
+    resultCount = fullResponse.resultCount;
 
     String aiAnswer = '';
-    if (waitForAi && (category == 'all' || category == 'images')) {
+    if (waitForAi) {
       aiAnswer = await getAiAnswerForSearch(results, query);
     }
 
@@ -202,10 +168,6 @@ class AIService extends ChangeNotifier {
     return SearchResponse(
       aiAnswer: aiAnswer,
       results: results,
-      imageResults: imageResults,
-      newsResults: newsResults,
-      videoResults: videoResults,
-      bookResults: bookResults,
       suggestions: suggestions,
       infoboxes: infoboxes,
       answers: answers,
@@ -242,9 +204,7 @@ class AIService extends ChangeNotifier {
     }
 
     List<SearchResult> results = [];
-    List<SearchResult> imageResults = [];
-    List<SearchResult> newsResults = [];
-    List<SearchResult> videoResults = [];
+    List<String> suggestions = [];
 
     try {
       results = await searchWeb(query, forceRefresh: forceRefresh);
@@ -254,43 +214,12 @@ class AIService extends ChangeNotifier {
       results = _fallbackResults(normalizedQuery);
     }
 
-    try {
-      imageResults = await searchImages(query);
-    } catch (_) {}
-    if (imageResults.isEmpty) {
-      imageResults = _fallbackResults(normalizedQuery, category: 'images');
-    }
-
-    try {
-      final videos = await searchByCategory(query, 'videos');
-      videoResults = videos;
-    } catch (_) {}
-    if (videoResults.isEmpty) {
-      videoResults = _fallbackResults(normalizedQuery, category: 'videos');
-    }
-
-    try {
-      newsResults = await searchByCategory(query, 'news');
-    } catch (_) {}
-    if (newsResults.isEmpty) {
-      newsResults = _fallbackResults(normalizedQuery, category: 'news');
-    }
-
-    List<SearchResult> bookResults = [];
-    try {
-      bookResults = _fallbackResults(normalizedQuery, category: 'books');
-    } catch (_) {}
-
     final searchResponse = SearchResponse(
       aiAnswer: '',
       results: results,
-      imageResults: imageResults.take(12).toList(),
-      newsResults: newsResults.take(10).toList(),
-      videoResults: videoResults.take(8).toList(),
-      bookResults: bookResults,
-      suggestions: [],
-      infoboxes: [],
-      answers: [],
+      suggestions: suggestions,
+      infoboxes: const [],
+      answers: const [],
       resultCount: results.length,
     );
 
@@ -321,20 +250,20 @@ class AIService extends ChangeNotifier {
     if (category == 'news') {
       final now = DateTime.now();
       return [
-        SearchResult(title: '$query - Latest News', url: 'https://news.google.com/search?q=$encoded', description: 'Latest news coverage of "$query".', relevanceScore: 0.9, publishedDate: now.toIso8601String()),
-        SearchResult(title: '$query - Reuters', url: 'https://www.reuters.com/search/news?blob=$encoded', description: 'Reuters coverage of "$query".', relevanceScore: 0.85, publishedDate: now.subtract(const Duration(hours: 2)).toIso8601String()),
-        SearchResult(title: '$query - BBC', url: 'https://www.bbc.co.uk/search?q=$encoded', description: 'BBC News coverage of "$query".', relevanceScore: 0.8, publishedDate: now.subtract(const Duration(hours: 4)).toIso8601String()),
-        SearchResult(title: '$query - AP News', url: 'https://apnews.com/search?q=$encoded', description: 'AP News articles about "$query".', relevanceScore: 0.75, publishedDate: now.subtract(const Duration(hours: 3)).toIso8601String()),
+        SearchResult(title: '$query - Reuters', url: 'https://www.reuters.com/search/news?blob=$encoded', description: 'Reuters coverage of "$query".', relevanceScore: 0.9, publishedDate: now.toIso8601String()),
+        SearchResult(title: '$query - BBC', url: 'https://www.bbc.co.uk/search?q=$encoded', description: 'BBC News coverage of "$query".', relevanceScore: 0.85, publishedDate: now.subtract(const Duration(hours: 2)).toIso8601String()),
+        SearchResult(title: '$query - AP News', url: 'https://apnews.com/search?q=$encoded', description: 'AP News articles about "$query".', relevanceScore: 0.8, publishedDate: now.subtract(const Duration(hours: 3)).toIso8601String()),
+        SearchResult(title: '$query - The Guardian', url: 'https://www.theguardian.com/search?q=$encoded', description: 'Guardian coverage of "$query".', relevanceScore: 0.75, publishedDate: now.subtract(const Duration(hours: 4)).toIso8601String()),
       ];
     }
 
     if (category == 'books') {
       return [
-        SearchResult(title: '$query - Books', url: 'https://books.google.com/books?q=$encoded', description: 'Books related to "$query".', relevanceScore: 0.9),
-        SearchResult(title: '$query - Open Library', url: 'https://openlibrary.org/search?q=$encoded', description: 'Browse Open Library for books about "$query".', relevanceScore: 0.85),
-        SearchResult(title: '$query - Goodreads', url: 'https://www.goodreads.com/search?q=$encoded', description: 'Book ratings and reviews for "$query".', relevanceScore: 0.8),
-        SearchResult(title: '$query - Project Gutenberg', url: 'https://www.gutenberg.org/ebooks/search/?query=$encoded', description: 'Free classic eBooks related to "$query".', relevanceScore: 0.75),
-        SearchResult(title: '$query - Internet Archive', url: 'https://archive.org/search?query=$encoded', description: 'Search the Internet Archive for books about "$query".', relevanceScore: 0.7),
+        SearchResult(title: '$query - Books', url: 'https://openlibrary.org/search?q=$encoded', description: 'Browse Open Library for books about "$query".', relevanceScore: 0.9),
+        SearchResult(title: '$query - Goodreads', url: 'https://www.goodreads.com/search?q=$encoded', description: 'Book ratings and reviews for "$query".', relevanceScore: 0.85),
+        SearchResult(title: '$query - Project Gutenberg', url: 'https://www.gutenberg.org/ebooks/search/?query=$encoded', description: 'Free classic eBooks related to "$query".', relevanceScore: 0.8),
+        SearchResult(title: '$query - Internet Archive', url: 'https://archive.org/search?query=$encoded', description: 'Search the Internet Archive for books about "$query".', relevanceScore: 0.75),
+        SearchResult(title: '$query - WorldCat', url: 'https://search.worldcat.org/search?q=$encoded', description: 'Find "$query" in libraries worldwide.', relevanceScore: 0.7),
       ];
     }
 
@@ -377,6 +306,7 @@ class AIService extends ChangeNotifier {
       final title = item['title']?.toString().trim() ?? '';
       final url = item['url']?.toString().trim() ?? '';
       if (title.isEmpty || url.isEmpty) continue;
+      if (!_isAbsoluteHttpUrl(url)) continue;
       results.add(SearchResult(
         title: title,
         url: url,
@@ -389,136 +319,10 @@ class AIService extends ChangeNotifier {
     return results;
   }
 
-  Future<List<SearchResult>> _searchDuckDuckGo(String query) async {
-    try {
-      final uri = Uri.parse('https://html.duckduckgo.com/html/')
-          .replace(queryParameters: {'q': query, 'ia': 'web'});
-      final response = await http.get(
-        uri,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      ).timeout(_searchTimeout);
-
-      if (response.statusCode != 200) return [];
-
-      final body = response.body;
-      final results = <SearchResult>[];
-
-      final resultRegex = RegExp(
-        r'<a[^>]*class="result__a[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
-        dotAll: true,
-      );
-      final snippetRegex = RegExp(
-        r'class="result__snippet[^"]*"[^>]*>(.*?)</(?:a|div|span)>',
-        dotAll: true,
-      );
-
-      final linkMatches = resultRegex.allMatches(body).toList();
-      final snippetMatches = snippetRegex.allMatches(body).toList();
-
-      for (var i = 0; i < linkMatches.length && results.length < _maxResults; i++) {
-        final match = linkMatches[i];
-        var rawUrl = match.group(1)?.trim() ?? '';
-        final rawTitle = _stripHtml(match.group(2)?.trim() ?? '');
-        if (rawTitle.isEmpty || rawUrl.isEmpty) continue;
-
-        final url = _extractDdgUrl(rawUrl);
-        if (url == null || url.contains('duckduckgo.com') || url.contains('duck.com')) continue;
-
-        String snippet = '';
-        if (i < snippetMatches.length) {
-          snippet = _stripHtml(snippetMatches[i].group(1)?.trim() ?? '');
-        }
-
-        results.add(SearchResult(
-          title: rawTitle,
-          url: url,
-          description: snippet,
-          relevanceScore: (1 - (results.length * 0.01)).clamp(0.0, 1.0),
-        ));
-      }
-
-      if (results.isEmpty) {
-        return await _searchDuckDuckGoLite(query);
-      }
-
-      return results;
-    } catch (_) {
-      return [];
-    }
-  }
-
-  Future<List<SearchResult>> _searchDuckDuckGoLite(String query) async {
-    try {
-      final uri = Uri.parse('https://lite.duckduckgo.com/lite/')
-          .replace(queryParameters: {'q': query});
-      final response = await http.get(
-        uri,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      ).timeout(_searchTimeout);
-
-      if (response.statusCode != 200) return [];
-
-      final body = response.body;
-      final results = <SearchResult>[];
-
-      final rowRegex = RegExp(
-        r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-        dotAll: true,
-      );
-
-      for (final match in rowRegex.allMatches(body)) {
-        if (results.length >= _maxResults) break;
-        var rawUrl = match.group(1)?.trim() ?? '';
-        final rawTitle = _stripHtml(match.group(2)?.trim() ?? '');
-        if (rawTitle.isEmpty || rawUrl.isEmpty) continue;
-
-        final url = rawUrl.startsWith('//') ? 'https:$rawUrl' : rawUrl;
-        if (url.contains('duckduckgo.com') || url.contains('duck.com')) continue;
-
-        results.add(SearchResult(
-          title: rawTitle,
-          url: url,
-          description: '',
-          relevanceScore: (1 - (results.length * 0.01)).clamp(0.0, 1.0),
-        ));
-      }
-
-      return results;
-    } catch (_) {
-      return [];
-    }
-  }
-
-  String? _extractDdgUrl(String rawUrl) {
-    try {
-      if (rawUrl.startsWith('//')) rawUrl = 'https:$rawUrl';
-      final uri = Uri.parse(rawUrl);
-      final uddg = uri.queryParameters['uddg'];
-      if (uddg != null && uddg.isNotEmpty) return Uri.decodeComponent(uddg);
-      if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) return rawUrl;
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  String _stripHtml(String html) {
-    return html
-        .replaceAll(RegExp(r'<[^>]*>'), '')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll('&nbsp;', ' ')
-        .trim();
+  bool _isAbsoluteHttpUrl(String url) {
+    final u = Uri.tryParse(url);
+    if (u == null) return false;
+    return u.scheme == 'http' || u.scheme == 'https';
   }
 
   Future<List<SearchResult>> searchByCategory(String query, String category) async {
@@ -571,6 +375,154 @@ class AIService extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  static const Duration _agentTimeout = Duration(minutes: 5);
+
+  Future<AgentResponse> sendAgentMessage(
+    String message, {
+    String? mode,
+    String? sessionId,
+  }) async {
+    if (!AppConfig.hasWorker) {
+      return const AgentResponse(
+        response: 'AI service is not configured. Please set the WORKER_URL.',
+        isSimple: true,
+      );
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.workerUrl}/v1/chat'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'message': message,
+              if (mode != null) 'mode': mode,
+              'session_id': sessionId ?? 'navigwiz',
+            }),
+          )
+          .timeout(_agentTimeout);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = json.decode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return AgentResponse.fromJson(decoded);
+        }
+      }
+      return AgentResponse(
+        response: 'The AI service returned an error (${response.statusCode}). Please try again.',
+        isSimple: true,
+      );
+    } catch (e) {
+      return const AgentResponse(
+        response: 'Could not reach the AI service. Please check your connection and try again.',
+        isSimple: true,
+      );
+    }
+  }
+
+  Future<AgentResponse> runResearchAgent(String query) async {
+    if (!AppConfig.hasWorker) {
+      return const AgentResponse(
+        response: 'AI service is not configured.',
+        isSimple: true,
+      );
+    }
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.workerUrl}/v1/research'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'query': query, 'session_id': 'navigwiz'}),
+          )
+          .timeout(_agentTimeout);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = json.decode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return AgentResponse.fromJson(decoded);
+        }
+      }
+      return AgentResponse(
+        response: 'Research service returned an error (${response.statusCode}).',
+        isSimple: true,
+      );
+    } catch (_) {
+      return const AgentResponse(
+        response: 'Could not reach the AI service. Please check your connection and try again.',
+        isSimple: true,
+      );
+    }
+  }
+
+  Future<AgentResponse> generateProjectAgent(
+    String description, {
+    String? language,
+  }) async {
+    if (!AppConfig.hasWorker) {
+      return const AgentResponse(
+        response: 'AI service is not configured.',
+        isSimple: true,
+      );
+    }
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.workerUrl}/v1/project/generate'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'description': description,
+              if (language != null) 'language': language,
+              'session_id': 'navigwiz',
+            }),
+          )
+          .timeout(_agentTimeout);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = json.decode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return AgentResponse.fromJson(decoded);
+        }
+      }
+      return AgentResponse(
+        response: 'Project service returned an error (${response.statusCode}).',
+        isSimple: true,
+      );
+    } catch (_) {
+      return const AgentResponse(
+        response: 'Could not reach the AI service. Please check your connection and try again.',
+        isSimple: true,
+      );
+    }
+  }
+
+  Future<String> generateImage(String prompt) async {
+    if (!AppConfig.hasWorker) return '';
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.workerUrl}/v1/image/generate'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'prompt': prompt,
+              'session_id': 'navigwiz',
+            }),
+          )
+          .timeout(const Duration(minutes: 3));
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = json.decode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          final data = decoded['image_data']?.toString() ?? decoded['base64']?.toString();
+          if (data != null && data.isNotEmpty) return data;
+          return decoded['url']?.toString() ?? '';
+        }
+      }
+      return '';
+    } catch (_) {
+      return '';
     }
   }
 }

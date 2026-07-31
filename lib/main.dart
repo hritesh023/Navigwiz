@@ -10,6 +10,7 @@ import 'services/theme_service.dart';
 import 'services/logging_service.dart';
 import 'services/analytics_service.dart';
 import 'services/update_service.dart';
+import 'services/service_worker_updater.dart';
 import 'services/central_auth_service.dart';
 import 'providers/chat_provider.dart';
 import 'providers/auth_provider.dart';
@@ -78,6 +79,8 @@ void main(List<String> args) async {
   await extractionProvider.initialize();
   await projectProvider.initialize();
   await settingsProvider.initialize();
+  browserService.setSearchEngine(settingsProvider.searchEngine);
+  browserService.setHomepageUrl(settingsProvider.homepageUrl);
 
   if (!kIsWeb) {
     await browserService.initialize(initialUrl: _initialUrlFromArgs(args));
@@ -104,7 +107,9 @@ void main(List<String> args) async {
       await logger.info('Starting Navigwiz v${AppConfig.appVersion}');
       await analytics.initialize();
       await aiService.initialize();
-      if (!kIsWeb) {
+      if (kIsWeb) {
+        watchForServiceWorkerUpdates();
+      } else {
         await updateService.initialize();
       }
       await logger.info('All services initialized successfully');

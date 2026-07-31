@@ -1,14 +1,17 @@
 {
-  "name": "test",
+  "name": "acronous-ai-worker",
   "version": "1.0.0",
-  "description": "AI worker test configuration",
+  "description": "Acronous AI worker - agentic AI backend for the Navigwiz browser",
   "scripts": {
     "test": "echo \"Test completed for ai-worker\" && exit 0",
-    "dev": "node -e \"const worker = require('./src/index'); console.log('Worker loaded successfully');\"",
+    "dev": "node -e \"import('./src/index.js').then(() => console.log('Worker loaded successfully')).catch((e) => { console.error(e); process.exit(1); });\"",
     "lint": "echo \"No linting configured for JavaScript\"",
     "build": "echo \"Building AI worker...\""
   },
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "author": "Acronous",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "^4.117.0"
+  }
 }
