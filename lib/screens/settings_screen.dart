@@ -50,8 +50,11 @@ class SettingsScreen extends StatelessWidget {
                           color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.smart_toy_outlined,
-                          color: Theme.of(context).colorScheme.primary, size: 22),
+                        child: Image.asset(
+                          'assets/images/navigwiz_logo_192.png',
+                          width: 22,
+                          height: 22,
+                        ),
                       ),
                       title: const Text('Assistant Name'),
                       subtitle: Text(sp.aiAssistantName,
@@ -502,7 +505,14 @@ class SettingsScreen extends StatelessWidget {
           decoration: InputDecoration(
             hintText: 'e.g. Athena, Jarvis, Nova...',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            prefixIcon: const Icon(Icons.smart_toy_outlined, size: 20),
+            prefixIcon: const SizedBox(
+              width: 20,
+              height: 20,
+              child: Image(
+                image: AssetImage('assets/images/navigwiz_logo_192.png'),
+                fit: BoxFit.contain,
+              ),
+            ),
           ),
           style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
         ),

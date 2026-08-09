@@ -22,6 +22,10 @@ class ProjectProvider extends ChangeNotifier {
   }
 
   Future<void> refreshFiles(String directory) async {
+    if (kIsWeb) {
+      _isLoading = false;
+      return;
+    }
     _isLoading = true;
     notifyListeners();
     _files.clear();
@@ -148,6 +152,7 @@ class ProjectProvider extends ChangeNotifier {
   }
 
   String _defaultProjectRoot() {
+    if (kIsWeb) return 'NavigwizProjects';
     try {
       if (Platform.isWindows) {
         return '${Platform.environment['USERPROFILE']}\\NavigwizProjects';

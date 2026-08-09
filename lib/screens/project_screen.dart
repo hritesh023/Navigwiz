@@ -28,6 +28,12 @@ class _ProjectScreenState extends State<ProjectScreen> {
   }
 
   void _initProjectRoot() {
+    final pp = Provider.of<ProjectProvider>(context, listen: false);
+    if (kIsWeb) {
+      _projectRoot = 'NavigwizProjects';
+      pp.setProjectRoot(_projectRoot);
+      return;
+    }
     try {
       if (Platform.isWindows) {
         _projectRoot = '${Platform.environment['USERPROFILE']}\\NavigwizProjects';
@@ -37,7 +43,6 @@ class _ProjectScreenState extends State<ProjectScreen> {
     } catch (_) {
       _projectRoot = '${Directory.systemTemp.path}/NavigwizProjects';
     }
-    final pp = Provider.of<ProjectProvider>(context, listen: false);
     pp.setProjectRoot(_projectRoot);
     pp.refreshFiles(_projectRoot);
   }

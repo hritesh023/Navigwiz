@@ -133,7 +133,7 @@ class AIService extends ChangeNotifier {
       return _cacheSearchResults(cacheKey, fromWorker);
     }
 
-    return _cacheSearchResults(cacheKey, _fallbackResults(normalizedQuery));
+    return const <SearchResult>[];
   }
 
   Future<SearchResponse> searchWithOverview(
@@ -210,10 +210,6 @@ class AIService extends ChangeNotifier {
       results = await searchWeb(query, forceRefresh: forceRefresh);
     } catch (_) {}
 
-    if (results.isEmpty) {
-      results = _fallbackResults(normalizedQuery);
-    }
-
     final searchResponse = SearchResponse(
       aiAnswer: '',
       results: results,
@@ -225,54 +221,6 @@ class AIService extends ChangeNotifier {
 
     _fullSearchCache[cacheKey] = _CachedFullResponse(response: searchResponse, storedAt: DateTime.now());
     return searchResponse;
-  }
-
-  List<SearchResult> _fallbackResults(String query, {String category = 'all'}) {
-    final encoded = Uri.encodeComponent(query);
-
-    if (category == 'images') {
-      return [
-        SearchResult(title: '$query - Images', url: 'https://unsplash.com/s/photos/$encoded', description: 'High-resolution photos related to "$query".', relevanceScore: 0.9),
-        SearchResult(title: '$query - Photos', url: 'https://pixabay.com/images/search/$encoded/', description: 'Free stock images for "$query".', relevanceScore: 0.85),
-        SearchResult(title: '$query - Visuals', url: 'https://www.flickr.com/search/?q=$encoded', description: 'Photos tagged with "$query".', relevanceScore: 0.8),
-        SearchResult(title: '$query - Stock', url: 'https://www.pexels.com/search/$encoded/', description: 'Stock photos related to "$query".', relevanceScore: 0.75),
-      ];
-    }
-
-    if (category == 'videos') {
-      return [
-        SearchResult(title: '$query - Videos', url: 'https://www.youtube.com/results?search_query=$encoded', description: 'Video results for "$query".', relevanceScore: 0.9),
-        SearchResult(title: '$query - Video Clips', url: 'https://vimeo.com/search?q=$encoded', description: 'Videos about "$query" on Vimeo.', relevanceScore: 0.85),
-        SearchResult(title: '$query - Dailymotion', url: 'https://www.dailymotion.com/search/$encoded', description: 'Video clips related to "$query".', relevanceScore: 0.8),
-      ];
-    }
-
-    if (category == 'news') {
-      final now = DateTime.now();
-      return [
-        SearchResult(title: '$query - Reuters', url: 'https://www.reuters.com/search/news?blob=$encoded', description: 'Reuters coverage of "$query".', relevanceScore: 0.9, publishedDate: now.toIso8601String()),
-        SearchResult(title: '$query - BBC', url: 'https://www.bbc.co.uk/search?q=$encoded', description: 'BBC News coverage of "$query".', relevanceScore: 0.85, publishedDate: now.subtract(const Duration(hours: 2)).toIso8601String()),
-        SearchResult(title: '$query - AP News', url: 'https://apnews.com/search?q=$encoded', description: 'AP News articles about "$query".', relevanceScore: 0.8, publishedDate: now.subtract(const Duration(hours: 3)).toIso8601String()),
-        SearchResult(title: '$query - The Guardian', url: 'https://www.theguardian.com/search?q=$encoded', description: 'Guardian coverage of "$query".', relevanceScore: 0.75, publishedDate: now.subtract(const Duration(hours: 4)).toIso8601String()),
-      ];
-    }
-
-    if (category == 'books') {
-      return [
-        SearchResult(title: '$query - Books', url: 'https://openlibrary.org/search?q=$encoded', description: 'Browse Open Library for books about "$query".', relevanceScore: 0.9),
-        SearchResult(title: '$query - Goodreads', url: 'https://www.goodreads.com/search?q=$encoded', description: 'Book ratings and reviews for "$query".', relevanceScore: 0.85),
-        SearchResult(title: '$query - Project Gutenberg', url: 'https://www.gutenberg.org/ebooks/search/?query=$encoded', description: 'Free classic eBooks related to "$query".', relevanceScore: 0.8),
-        SearchResult(title: '$query - Internet Archive', url: 'https://archive.org/search?query=$encoded', description: 'Search the Internet Archive for books about "$query".', relevanceScore: 0.75),
-        SearchResult(title: '$query - WorldCat', url: 'https://search.worldcat.org/search?q=$encoded', description: 'Find "$query" in libraries worldwide.', relevanceScore: 0.7),
-      ];
-    }
-
-    return [
-      SearchResult(title: '$query - Wikipedia', url: 'https://en.wikipedia.org/w/index.php?search=$encoded', description: 'Encyclopedia information about "$query".', relevanceScore: 0.9),
-      SearchResult(title: '$query - Britannica', url: 'https://www.britannica.com/search?query=$encoded', description: 'Encyclopedia entry for "$query".', relevanceScore: 0.85),
-      SearchResult(title: '$query - YouTube', url: 'https://www.youtube.com/results?search_query=$encoded', description: 'Videos about "$query" on YouTube.', relevanceScore: 0.8),
-      SearchResult(title: '$query - Reddit', url: 'https://www.reddit.com/search/?q=$encoded', description: 'Community discussions about "$query".', relevanceScore: 0.75),
-    ];
   }
 
   Future<List<SearchResult>> _searchViaWorker(String query, String category) async {
@@ -331,14 +279,14 @@ class AIService extends ChangeNotifier {
     final fromWorker = await _searchViaWorker(query, category);
     if (fromWorker.isNotEmpty) return fromWorker;
 
-    return _fallbackResults(query, category: category);
+    return const <SearchResult>[];
   }
 
   Future<List<SearchResult>> searchImages(String query) async {
     final fromWorker = await _searchViaWorker(query, 'images');
     if (fromWorker.isNotEmpty) return fromWorker;
 
-    return _fallbackResults(query, category: 'images');
+    return const <SearchResult>[];
   }
 
   Future<String> askAi(String input, {String? extraInstructions}) async {
