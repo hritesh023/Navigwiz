@@ -81,6 +81,28 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   }
 }
 
+async function extractPageContent(url, maxChars = 2000) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36 AcronousAI/1.0',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) return '';
+    const contentType = response.headers.get('Content-Type') || '';
+    if (!contentType.includes('text/html')) return '';
+    const html = await response.text();
+    return stripHtml(html).replace(/\s+/g, ' ').trim().slice(0, maxChars);
+  } catch (_) {
+    return '';
+  }
+}
+
 async function runLimitedConcurrent(items, limit, worker) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -97,32 +119,88 @@ async function runLimitedConcurrent(items, limit, worker) {
 }
 
 // ------------------------------------------------------------------ LLM
-async function callLLM({
-  env,
-  messages,
-  maxTokens = 2048,
-  temperature = 0.7,
-  jsonMode = false,
-  model,
-  timeoutMs = 180000,
-}) {
+// Fast provider chain: Cloudflare Workers AI (keyless, fast) is primary,
+// self-hosted Oracle (Ollama) is a last resort.
+// Every provider has a short timeout so responses stay quick.
+
+const CF_LLM_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const CF_LLM_FAST = '@cf/meta/llama-3.1-8b-instruct-fp8';
+const CF_CODE_MODEL = '@cf/qwen/qwen2.5-coder-32b-instruct';
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
+// Resolves with the first { ok: true } result, or { ok: false } after timeoutMs.
+function raceSuccess(producers, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (val) => {
+      if (!settled && val && val.ok) {
+        settled = true;
+        resolve(val);
+      }
+    };
+    for (const p of producers) p.then(done, () => {});
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve({ ok: false });
+      }
+    }, timeoutMs);
+  });
+}
+
+function pickModel(task, jsonMode) {
+  if (task === 'code') return CF_CODE_MODEL;
+  if (jsonMode) return CF_LLM_MODEL;
+  return CF_LLM_MODEL;
+}
+
+async function callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task) {
+  if (!env || !env.AI || typeof env.AI.run !== 'function') {
+    return { ok: false };
+  }
+  try {
+    const model = pickModel(task, jsonMode);
+    const body = {
+      messages,
+      max_tokens: Math.min(maxTokens, 3500),
+      temperature,
+    };
+    if (jsonMode) body.response_format = { type: 'json_object' };
+    const resp = await withTimeout(env.AI.run(model, body), 28000);
+    const content =
+      (resp && (resp.response || resp.output_text || resp.output || '')) || '';
+    if (content.trim()) return { ok: true, content, provider: 'workers-ai', model };
+    return { ok: false };
+  } catch (e) {
+    console.error('Workers AI unavailable:', e.message);
+    return { ok: false };
+  }
+}
+
+async function callOracle(env, messages, maxTokens, temperature, jsonMode, model) {
   const oracleUrl = env.ORACLE_LLM_URL || DEFAULT_ORACLE_URL;
   const oracleKey = env.ORACLE_LLM_KEY || '';
-  const oracleModel = env.ORACLE_LLM_MODEL || DEFAULT_ORACLE_MODEL;
-
+  const oracleModel = model || env.ORACLE_LLM_MODEL || 'qwen2.5:1.5b';
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
   const headers = { 'Content-Type': 'application/json' };
   if (oracleKey) headers['Authorization'] = `Bearer ${oracleKey}`;
   const body = {
-    model: model || oracleModel,
+    model: oracleModel,
     messages,
     temperature,
     stream: false,
   };
   if (jsonMode) body.response_format = { type: 'json_object' };
-  else body.max_tokens = maxTokens;
-
+  else body.max_tokens = Math.min(maxTokens, 2048);
   try {
     const resp = await fetch(`${oracleUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -131,20 +209,39 @@ async function callLLM({
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    if (!resp.ok) {
-      const errText = (await resp.text()).slice(0, 300);
-      console.error(`Oracle LLM error: ${resp.status}`, errText);
-      throw new Error(`Oracle LLM error: ${resp.status}`);
-    }
+    if (!resp.ok) return { ok: false };
     const data = await resp.json();
     const content = data.choices?.[0]?.message?.content || '';
-    if (content) return content;
-    throw new Error('Oracle LLM returned empty response');
+    if (content.trim()) return { ok: true, content, provider: 'oracle', model: oracleModel };
+    return { ok: false };
   } catch (e) {
     clearTimeout(timeoutId);
     console.error('Oracle LLM unavailable:', e.message);
-    throw e;
+    return { ok: false };
   }
+}
+
+async function callLLM({
+  env,
+  messages,
+  maxTokens = 2048,
+  temperature = 0.7,
+  jsonMode = false,
+  model,
+  timeoutMs = 60000,
+  task = 'chat',
+}) {
+  const producers = [callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task)];
+
+  const fastMs = Math.min(timeoutMs, 32000);
+  const fast = await raceSuccess(producers, fastMs);
+  if (fast.ok) return fast.content;
+
+  const oracle = await callOracle(env, messages, maxTokens, temperature, jsonMode, model);
+  if (oracle.ok) return oracle.content;
+
+  console.error('All LLM providers unavailable');
+  throw new Error('LLM unavailable');
 }
 
 function extractJson(raw) {
@@ -515,7 +612,10 @@ async function searchSearxng(query, category, maxResults) {
       : category === 'news' ? 'news'
       : 'general';
 
-  for (const searxngUrl of SEARXNG_URLS) {
+  // Query every SearXNG instance in parallel with a short timeout; take the
+  // first one that returns results. This is dramatically faster and more
+  // reliable than trying instances one-by-one.
+  const attempts = SEARXNG_URLS.map(async (searxngUrl) => {
     try {
       const searchUrl = new URL(searxngUrl);
       searchUrl.searchParams.set('q', query);
@@ -527,15 +627,12 @@ async function searchSearxng(query, category, maxResults) {
       const response = await fetchWithTimeout(
         searchUrl.toString(),
         { headers: { 'Accept': 'application/json', 'User-Agent': 'AcronousAI/1.0.0' } },
-        15000
+        6000
       );
-      if (!response.ok) {
-        console.error(`SearXNG error on ${searxngUrl}: ${response.status}`);
-        continue;
-      }
+      if (!response.ok) return null;
       const data = await response.json();
       const rawResults = data.results || [];
-      if (rawResults.length === 0) continue;
+      if (rawResults.length === 0) return null;
       return {
         results: rawResults.slice(0, maxResults || 50).map((r) => ({
           title: r.title || '',
@@ -559,82 +656,119 @@ async function searchSearxng(query, category, maxResults) {
         numberOfResults: data.number_of_results || null,
       };
     } catch (error) {
-      console.error(`SearXNG proxy error on ${searxngUrl}:`, error.message);
-      continue;
+      return null;
     }
+  });
+
+  const settled = await Promise.allSettled(attempts);
+  for (const s of settled) {
+    if (s.status === 'fulfilled' && s.value) return s.value;
   }
   return null;
 }
 
+async function mojeekSearch(query, maxResults = 10) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    const response = await fetch(
+      `https://www.mojeek.com/search?q=${encodeURIComponent(query)}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeoutId);
+    if (!response.ok) return [];
+    const body = await response.text();
+    const results = [];
+    const itemRegex = /<a class="title" href="([^"]+)"[^>]*>(.*?)<\/a>([\s\S]*?)<p class="s">([\s\S]*?)<\/p>/gs;
+    for (const m of [...body.matchAll(itemRegex)]) {
+      if (results.length >= maxResults) break;
+      const rawUrl = (m[1] || '').trim();
+      const rawTitle = stripHtml(m[2] || '').trim();
+      if (!rawTitle || !rawUrl) continue;
+      const url = normalizeResultUrl(rawUrl);
+      if (!url || !validResultUrl(url)) continue;
+      const snippet = stripHtml(m[4] || '').trim();
+      results.push({ title: rawTitle, url, snippet, img_src: null, publishedDate: null });
+    }
+    return results;
+  } catch (_) {
+    return [];
+  }
+}
+
+async function startpageSearch(query, maxResults = 10) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    const response = await fetch(
+      `https://www.startpage.com/sp/search?query=${encodeURIComponent(query)}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeoutId);
+    if (!response.ok) return [];
+    const body = await response.text();
+    const results = [];
+    const itemRegex = /<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>([\s\S]*?)<p[^>]*class="[^"]*description[^"]*"[^>]*>([\s\S]*?)<\/p>/gs;
+    for (const m of [...body.matchAll(itemRegex)]) {
+      if (results.length >= maxResults) break;
+      const rawUrl = (m[1] || '').trim();
+      const rawTitle = stripHtml(m[2] || '').trim();
+      if (!rawTitle || !rawUrl) continue;
+      const url = normalizeResultUrl(rawUrl);
+      if (!url || !validResultUrl(url)) continue;
+      const snippet = stripHtml(m[4] || '').trim();
+      results.push({ title: rawTitle, url, snippet, img_src: null, publishedDate: null });
+    }
+    return results;
+  } catch (_) {
+    return [];
+  }
+}
+
+// Runs several independent search engines in parallel and merges their results
+// so the browser can reach the whole internet quickly and reliably.
 async function searchFromWeb(query, maxResults = 10) {
-  let searchResults = [];
-  const searxngResult = await searchSearxng(query, 'all', maxResults);
-  if (searxngResult) searchResults = cleanSearchResults(searxngResult.results) || [];
+  const category = 'all';
 
-  if (searchResults.length < maxResults / 2) {
-    const ddgHtmlResults = cleanSearchResults(await duckDuckGoHtmlSearch(query, maxResults));
-    if (ddgHtmlResults.length > 0) {
-      searchResults = [
-        ...ddgHtmlResults.map((r) => ({
-          title: r.title,
-          url: r.url,
-          content: r.snippet,
-          img_src: r.img_src || null,
-          publishedDate: r.publishedDate || null,
-        })),
-        ...searchResults,
-      ].slice(0, maxResults);
-    }
-  }
+  const [searxngResult, ddgHtml, bing, wiki, ddgApi, mojeek, startpage] = await Promise.all([
+    searchSearxng(query, category, maxResults),
+    withTimeout(duckDuckGoHtmlSearch(query, maxResults), 8000).catch(() => []),
+    withTimeout(bingSearch(query, maxResults), 8000).catch(() => []),
+    withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 5000).catch(() => []),
+    withTimeout(duckDuckGoApiSearch(query, maxResults), 6000).catch(() => []),
+    withTimeout(mojeekSearch(query, maxResults), 7000).catch(() => []),
+    withTimeout(startpageSearch(query, maxResults), 7000).catch(() => []),
+  ]);
 
-  if (searchResults.length < maxResults / 2) {
-    const bingResults = cleanSearchResults(await bingSearch(query, maxResults));
-    if (bingResults.length > 0) {
-      searchResults = [
-        ...bingResults.map((r) => ({
-          title: r.title,
-          url: r.url,
-          content: r.snippet,
-          img_src: r.img_src || null,
-          publishedDate: r.publishedDate || null,
-        })),
-        ...searchResults,
-      ].slice(0, maxResults);
-    }
+  const merged = [];
+  if (searxngResult && Array.isArray(searxngResult.results)) {
+    merged.push(...searxngResult.results);
   }
+  const toMerged = (list) =>
+    (list || []).map((r) => ({
+      title: r.title || '',
+      url: r.url || '',
+      content: r.snippet || r.content || '',
+      img_src: r.img_src || null,
+      publishedDate: r.publishedDate || null,
+    }));
+  merged.push(...toMerged(ddgHtml), ...toMerged(bing), ...toMerged(wiki), ...toMerged(ddgApi), ...toMerged(mojeek), ...toMerged(startpage));
 
-  if (searchResults.length < maxResults / 2) {
-    const wikiResults = cleanSearchResults(await wikipediaSearch(query, maxResults));
-    if (wikiResults.length > 0) {
-      searchResults = [
-        ...wikiResults.map((r) => ({
-          title: r.title,
-          url: r.url,
-          content: r.snippet,
-          img_src: null,
-          publishedDate: null,
-        })),
-        ...searchResults,
-      ].slice(0, maxResults);
-    }
-  }
-
-  if (searchResults.length < maxResults / 2) {
-    const ddgApiResults = cleanSearchResults(await duckDuckGoApiSearch(query, maxResults));
-    if (ddgApiResults.length > 0) {
-      searchResults = [
-        ...ddgApiResults.map((r) => ({
-          title: r.title,
-          url: r.url,
-          content: r.snippet,
-          img_src: null,
-          publishedDate: null,
-        })),
-        ...searchResults,
-      ].slice(0, maxResults);
-    }
-  }
-  return searchResults;
+  return cleanSearchResults(dedupeByUrl(merged)).slice(0, maxResults);
 }
 
 // ------------------------------------------------------------------ Research
@@ -663,7 +797,8 @@ async function planResearch(env, query) {
       ],
       maxTokens: 300,
       temperature: 0.5,
-      timeoutMs: 60000,
+      timeoutMs: 30000,
+      task: 'chat',
     });
     const lines = raw
       .split('\n')
@@ -705,8 +840,23 @@ async function runResearch(env, query) {
     return { research, sources: [], response: research.executive_summary };
   }
 
-  const context = topResults
-    .map((r) => `- ${r.title}\n  URL: ${r.url}\n  ${(r.content || '').slice(0, 400)}`)
+  // Deep research: fetch the actual page content of the top sources so the
+  // report is built from real facts, not just snippets.
+  const withContent = await runLimitedConcurrent(
+    topResults.slice(0, 8),
+    3,
+    async (r) => {
+      const text = await extractPageContent(r.url, 1800);
+      return text ? { ...r, page_text: text } : r;
+    }
+  );
+  const researchSources = withContent.length ? withContent : topResults;
+
+  const context = researchSources
+    .map(
+      (r) =>
+        `- ${r.title}\n  URL: ${r.url}\n  ${(r.page_text || r.content || r.snippet || '').slice(0, 700)}`
+    )
     .join('\n\n');
 
   try {
@@ -716,19 +866,21 @@ async function runResearch(env, query) {
         {
           role: 'system',
           content:
-            `${AGENT_IDENTITY}\n\nYou are also a senior research analyst. Based ONLY on the provided search results, write a structured research report about the user topic. Current date: ${nowIso()}. Respond with JSON only, in this exact shape:\n` +
+            `${AGENT_IDENTITY}\n\nYou are also a senior research analyst. Based ONLY on the provided search results and page excerpts, write a structured research report about the user topic. Current date: ${nowIso()}. Respond with JSON only, in this exact shape:\n` +
             '{\n  "executive_summary": "2-4 sentence overview",\n  "key_findings": [{"title": "short", "finding": "1-2 sentence finding", "sources": ["https://url"]}],\n  "recommendations": ["recommendation", "..."],\n  "references": [{"title": "page title", "url": "https://url"}]\n}\n' +
-            'Only reference URLs that appear in the provided results. Keep findings factual and recommendations concrete. For comparison topics (e.g. "best X under budget"), give a clear verdict on the best overall choice.',
+            'Only reference URLs that appear in the provided results. Keep findings factual and recommendations concrete.\n' +
+            'IMPORTANT: When the topic is a comparison/buying guide (e.g. "best smartphone under budget"), after the findings give a clear VERDICT: name the single best overall choice AND the best pick in each major category (e.g. best camera, best battery, best value). Put the verdict at the start of the recommendations list, prefixed with "VERDICT: ".',
         },
         {
           role: 'user',
-          content: `Research topic: ${query}\n\nSearch results:\n${context}\n\nReturn the JSON report.`,
+          content: `Research topic: ${query}\n\nSearch results and page excerpts:\n${context}\n\nReturn the JSON report.`,
         },
       ],
-      maxTokens: 2500,
+      maxTokens: 3000,
       temperature: 0.4,
       jsonMode: true,
-      timeoutMs: 180000,
+      timeoutMs: 90000,
+      task: 'research',
     });
 
     const parsed = extractJson(raw);
@@ -750,17 +902,17 @@ async function runResearch(env, query) {
       };
     } else {
       research.executive_summary = raw;
-      research.references = topResults.slice(0, 8).map((r) => ({ title: r.title, url: r.url }));
+      research.references = researchSources.slice(0, 8).map((r) => ({ title: r.title, url: r.url }));
     }
   } catch (e) {
     research.executive_summary = `I gathered the most relevant sources for "${query}" below. The full AI synthesis was unavailable, but these references are a great starting point.`;
-    research.key_findings = topResults.slice(0, 6).map((r) => ({
+    research.key_findings = researchSources.slice(0, 6).map((r) => ({
       title: r.title,
-      finding: (r.content || '').slice(0, 220),
+      finding: (r.page_text || r.content || '').slice(0, 220),
       sources: [r.url],
     }));
     research.recommendations = [`Open the linked sources to read the details`, `Ask me to compare any two options from the list`];
-    research.references = topResults.slice(0, 8).map((r) => ({ title: r.title, url: r.url }));
+    research.references = researchSources.slice(0, 8).map((r) => ({ title: r.title, url: r.url }));
   }
 
   let markdown = `## ${query}\n\n### Executive Summary\n${research.executive_summary}\n\n### Key Findings\n`;
@@ -784,24 +936,49 @@ async function runResearch(env, query) {
 }
 
 // ------------------------------------------------------------------ Project generation
-const PROJECT_TEMPLATES = {
-  html: (name, summary) => ({
-    'index.html': `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${name}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <main>\n    <h1>${name}</h1>\n    <p>${summary || 'A new web project.'}</p>\n    <script src="app.js"></script>\n  </main>\n</body>\n</html>\n`,
-    'style.css': `* { margin: 0; box-sizing: border-box; }\nbody { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: grid; place-items: center; }\nmain { text-align: center; padding: 2rem; }\n`,
-    'app.js': `console.log('${name} loaded');\n`,
-    'README.md': `# ${name}\n\n${summary || 'A new web project generated by Acronous AI.'}\n\nOpen \`index.html\` in a browser to run.\n`,
-  }),
-  python: (name, summary) => ({
+// Offline fallbacks are REAL, functional apps (not plain text) so the user
+// always gets working code even if every LLM provider is unavailable.
+function todoAppFiles(name, summary) {
+  return {
+    'index.html': `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${name}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <main>\n    <h1>${name}</h1>\n    <p class="sub">${summary || 'A simple task manager.'}</p>\n    <form id="addForm" class="add-form">\n      <input id="todoInput" type="text" placeholder="What needs to be done?" autocomplete="off" required>\n      <button type="submit">Add</button>\n    </form>\n    <ul id="todoList"></ul>\n    <p class="counter" id="counter"></p>\n  </main>\n  <script src="app.js"></script>\n</body>\n</html>\n`,
+    'style.css': `* { margin: 0; box-sizing: border-box; }\nbody { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: grid; place-items: center; padding: 1rem; }\nmain { width: 100%; max-width: 480px; background: #1e293b; border-radius: 16px; padding: 2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }\nh1 { font-size: 1.6rem; }\n.sub { color: #94a3b8; margin: 0.3rem 0 1.2rem; }\n.add-form { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; }\n.add-form input { flex: 1; padding: 0.7rem 0.9rem; border-radius: 10px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 1rem; outline: none; }\n.add-form button { padding: 0.7rem 1.2rem; border: none; border-radius: 10px; background: #6366f1; color: white; font-weight: 600; cursor: pointer; }\nul { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }\nli { display: flex; align-items: center; gap: 0.6rem; background: #0f172a; padding: 0.7rem 0.9rem; border-radius: 10px; }\nli input[type="checkbox"] { width: 18px; height: 18px; accent-color: #6366f1; }\nli span { flex: 1; }\nli.done span { text-decoration: line-through; color: #64748b; }\nli button { background: none; border: none; color: #f87171; cursor: pointer; font-size: 1rem; }\n.counter { margin-top: 1.2rem; color: #94a3b8; font-size: 0.85rem; }\n`,
+    'app.js': `const form = document.getElementById('addForm');\nconst input = document.getElementById('todoInput');\nconst list = document.getElementById('todoList');\nconst counter = document.getElementById('counter');\n\nlet todos = JSON.parse(localStorage.getItem('${name}') || '[]');\n\nfunction save() { localStorage.setItem('${name}', JSON.stringify(todos)); render(); }\n\nfunction render() {\n  list.innerHTML = '';\n  todos.forEach((todo, index) => {\n    const li = document.createElement('li');\n    li.className = todo.done ? 'done' : '';\n    const cb = document.createElement('input');\n    cb.type = 'checkbox';\n    cb.checked = todo.done;\n    cb.addEventListener('change', () => { todos[index].done = cb.checked; save(); });\n    const span = document.createElement('span');\n    span.textContent = todo.text;\n    const del = document.createElement('button');\n    del.textContent = '✕';\n    del.addEventListener('click', () => { todos.splice(index, 1); save(); });\n    li.append(cb, span, del);\n    list.appendChild(li);\n  });\n  const remaining = todos.filter(t => !t.done).length;\n  counter.textContent = remaining + ' task' + (remaining === 1 ? '' : 's') + ' remaining';\n}\n\nform.addEventListener('submit', (e) => {\n  e.preventDefault();\n  const text = input.value.trim();\n  if (!text) return;\n  todos.push({ text, done: false });\n  input.value = '';\n  save();\n});\n\nrender();\n`,
+    'README.md': `# ${name}\n\n${summary || 'A simple task manager.'}\n\nOpen \`index.html\` in a browser. Tasks are saved in your browser's local storage.\n`,
+  };
+}
+
+function calcAppFiles(name, summary) {
+  return {
+    'index.html': `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${name}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <main>\n    <h1>${name}</h1>\n    <p class="sub">${summary || 'A simple calculator.'}</p>\n    <div class="calc">\n      <input id="display" type="text" readonly value="0">\n      <div class="keys" id="keys"></div>\n    </div>\n  </main>\n  <script src="app.js"></script>\n</body>\n</html>\n`,
+    'style.css': `* { margin: 0; box-sizing: border-box; }\nbody { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: grid; place-items: center; padding: 1rem; }\nmain { width: 100%; max-width: 320px; background: #1e293b; border-radius: 16px; padding: 1.5rem; }\nh1 { font-size: 1.4rem; margin-bottom: 0.2rem; }\n.sub { color: #94a3b8; margin-bottom: 1rem; font-size: 0.9rem; }\n.calc input { width: 100%; padding: 1rem; font-size: 1.5rem; text-align: right; border-radius: 10px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 1rem; outline: none; }\n.keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }\n.keys button { padding: 0.9rem; border: none; border-radius: 10px; background: #334155; color: #e2e8f0; font-size: 1.1rem; cursor: pointer; }\n.keys button.op { background: #6366f1; }\n.keys button.eq { background: #10b981; grid-column: span 2; }\n`,
+    'app.js': `const display = document.getElementById('display');\nconst keys = document.getElementById('keys');\nlet expr = '';\nconst labels = ['7','8','9','/', '4','5','6','*', '1','2','3','-', 'C','0','=','+'];\nkeys.innerHTML = labels.map(l => '<button class="' + ('+-*/'.includes(l) ? 'op' : l === '=' ? 'eq' : '') + '">' + l + '</button>').join('');\nkeys.addEventListener('click', (e) => {\n  const k = e.target.textContent;\n  if (k === 'C') { expr = ''; display.value = '0'; return; }\n  if (k === '=') {\n    try { expr = String(Function('"use strict";return (' + expr + ')')()); display.value = expr; }\n    catch { display.value = 'Error'; expr = ''; }\n    return;\n  }\n  expr += k;\n  display.value = expr;\n});\n`,
+    'README.md': `# ${name}\n\n${summary || 'A simple calculator.'}\n\nOpen \`index.html\` in a browser.\n`,
+  };
+}
+
+function webAppFiles(name, summary) {
+  return {
+    'index.html': `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${name}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <header>\n    <div class="brand">${name}</div>\n    <nav>\n      <a href="#home">Home</a>\n      <a href="#about">About</a>\n      <a href="#contact">Contact</a>\n    </nav>\n  </header>\n  <main>\n    <section id="home" class="hero">\n      <h1>${name}</h1>\n      <p>${summary || 'A modern web project.'}</p>\n      <button onclick="alert('Welcome to ${name}!')">Get Started</button>\n    </section>\n    <section id="about" class="section">\n      <h2>About</h2>\n      <p>This project was generated by Acronous AI in the Navigwiz browser.</p>\n    </section>\n    <section id="contact" class="section">\n      <h2>Contact</h2>\n      <p>Reach out any time — this is a fully runnable static site.</p>\n    </section>\n  </main>\n  <footer>&copy; <span id="year"></span> ${name}</footer>\n  <script src="app.js"></script>\n</body>\n</html>\n`,
+    'style.css': `* { margin: 0; box-sizing: border-box; }\nbody { font-family: system-ui, sans-serif; background: #f8fafc; color: #0f172a; }\nheader { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; background: #0f172a; color: #f8fafc; position: sticky; top: 0; }\n.brand { font-weight: 800; font-size: 1.2rem; }\nnav a { color: #cbd5e1; text-decoration: none; margin-left: 1rem; }\nnav a:hover { color: #fff; }\n.hero { text-align: center; padding: 5rem 2rem; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; }\n.hero h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }\n.hero button { margin-top: 1.5rem; padding: 0.8rem 1.8rem; border: none; border-radius: 999px; background: white; color: #4f46e5; font-weight: 700; cursor: pointer; }\n.section { padding: 3rem 2rem; max-width: 720px; margin: auto; }\n.section h2 { margin-bottom: 0.5rem; }\nfooter { text-align: center; padding: 2rem; color: #64748b; }\n`,
+    'app.js': `document.getElementById('year').textContent = new Date().getFullYear();\nconsole.log('${name} loaded');\n`,
+    'README.md': `# ${name}\n\n${summary || 'A modern web project.'}\n\nOpen \`index.html\` in a browser.\n`,
+  };
+}
+
+function pythonAppFiles(name, summary, isTodo) {
+  if (isTodo) {
+    return {
+      'main.py': `#!/usr/bin/env python3\n"""${name} - ${summary || 'A todo list app.'}"""\n\nimport json\nimport os\nfrom datetime import datetime\n\nDATA_FILE = "todos.json"\n\n\ndef load_todos():\n    if os.path.exists(DATA_FILE):\n        with open(DATA_FILE) as f:\n            return json.load(f)\n    return []\n\n\ndef save_todos(todos):\n    with open(DATA_FILE, "w") as f:\n        json.dump(todos, f, indent=2)\n\n\ndef main():\n    todos = load_todos()\n    print(f"{name} - {summary}")\n    while True:\n        print("\\n1. Add task\\n2. List tasks\\n3. Mark done\\n4. Delete task\\n5. Quit")\n        choice = input("Choose: ").strip()\n        if choice == "1":\n            text = input("Task: ").strip()\n            if text:\n                todos.append({"text": text, "done": False, "created": datetime.now().isoformat()})\n                save_todos(todos)\n                print("Added.")\n        elif choice == "2":\n            for i, t in enumerate(todos, 1):\n                mark = "[x]" if t["done"] else "[ ]"\n                print(f"{i}. {mark} {t['text']}")\n        elif choice == "3":\n            idx = int(input("Number: ")) - 1\n            if 0 <= idx < len(todos):\n                todos[idx]["done"] = True\n                save_todos(todos)\n                print("Marked done.")\n        elif choice == "4":\n            idx = int(input("Number: ")) - 1\n            if 0 <= idx < len(todos):\n                todos.pop(idx)\n                save_todos(todos)\n                print("Deleted.")\n        elif choice == "5":\n            break\n\n\nif __name__ == "__main__":\n    main()\n`,
+      'requirements.txt': ``,
+      'README.md': `# ${name}\n\n${summary || 'A todo list app.'}\n\nRun: \`python main.py\`\n`,
+    };
+  }
+  return {
     'main.py': `#!/usr/bin/env python3\n"""${name} - ${summary || 'A new Python project generated by Acronous AI.'}"""\n\n\ndef main():\n    print("${name} running")\n\n\nif __name__ == "__main__":\n    main()\n`,
     'requirements.txt': `# add dependencies here\n`,
     'README.md': `# ${name}\n\n${summary || 'A new Python project.'}\n\nRun: \`python main.py\`\n`,
-  }),
-  javascript: (name, summary) => ({
-    'package.json': `{\n  "name": "${name}",\n  "version": "1.0.0",\n  "description": "${summary || 'A new Node.js project'}",\n  "main": "index.js",\n  "scripts": { "start": "node index.js" }\n}\n`,
-    'index.js': `// ${name} - ${summary || 'A new Node.js project'}\n\nfunction main() {\n  console.log("${name} running");\n}\n\nmain();\n`,
-    'README.md': `# ${name}\n\n${summary || 'A new Node.js project.'}\n\nRun: \`npm install && npm start\`\n`,
-  }),
-};
+  };
+}
 
 function fallbackProject(description, language) {
   const name = description
@@ -811,13 +988,42 @@ function fallbackProject(description, language) {
     .slice(0, 30) || 'my-project';
   const summary = description.trim();
   const lang = (language || '').toLowerCase();
-  const base = { project_name: name, language: 'html', summary };
-  if (lang.startsWith('py')) return { ...base, language: 'python', files: PROJECT_TEMPLATES.python(name, summary) };
-  if (lang.startsWith('js') || lang.startsWith('node')) return { ...base, language: 'javascript', files: PROJECT_TEMPLATES.javascript(name, summary) };
-  return { ...base, files: PROJECT_TEMPLATES.html(name, summary) };
+  const isTodo = /todo|task|to-do|reminder/.test(description.toLowerCase());
+  const isCalc = /calc(ulator)?/.test(description.toLowerCase());
+
+  if (lang.startsWith('py')) {
+    return {
+      project_name: name,
+      language: 'python',
+      summary,
+      files: pythonAppFiles(name, summary, isTodo),
+    };
+  }
+  if (lang.startsWith('js') || lang.startsWith('node')) {
+    const files = isTodo
+      ? {
+          'package.json': `{\n  "name": "${name}",\n  "version": "1.0.0",\n  "description": "${summary || 'A todo list CLI'}",\n  "main": "index.js",\n  "scripts": { "start": "node index.js" }\n}\n`,
+          'index.js': `// ${name} - ${summary || 'A todo list CLI'}\nconst fs = require('fs');\nconst FILE = 'todos.json';\nconst todos = fs.existsSync(FILE) ? JSON.parse(fs.readFileSync(FILE)) : [];\nconst args = process.argv.slice(2);\nconst action = args[0];\nif (action === 'add') {\n  todos.push({ text: args.slice(1).join(' '), done: false });\n  fs.writeFileSync(FILE, JSON.stringify(todos, null, 2));\n  console.log('Added.');\n} else if (action === 'list') {\n  todos.forEach((t, i) => console.log((i + 1) + '. ' + (t.done ? '[x] ' : '[ ] ') + t.text));\n} else if (action === 'done') {\n  todos[Number(args[1]) - 1].done = true;\n  fs.writeFileSync(FILE, JSON.stringify(todos, null, 2));\n  console.log('Marked done.');\n} else {\n  console.log('Usage: node index.js add|list|done <n>');\n}\n`,
+          'README.md': `# ${name}\n\n${summary || 'A todo list CLI'}\n\nRun: \`npm start -- list\` / \`node index.js add buy milk\`\n`,
+        }
+      : {
+          'package.json': `{\n  "name": "${name}",\n  "version": "1.0.0",\n  "description": "${summary || 'A new Node.js project'}",\n  "main": "index.js",\n  "scripts": { "start": "node index.js" }\n}\n`,
+          'index.js': `// ${name} - ${summary || 'A new Node.js project'}\n\nfunction main() {\n  console.log("${name} running");\n}\n\nmain();\n`,
+          'README.md': `# ${name}\n\n${summary || 'A new Node.js project.'}\n\nRun: \`npm install && npm start\`\n`,
+        };
+    return { project_name: name, language: 'javascript', summary, files };
+  }
+  let files;
+  if (isTodo) files = todoAppFiles(name, summary);
+  else if (isCalc) files = calcAppFiles(name, summary);
+  else files = webAppFiles(name, summary);
+  return { project_name: name, language: 'html', summary, files };
 }
 
-async function generateProject(env, description, language) {
+async function generateProject(env, description, language, extraContext = '') {
+  const researchBlock = extraContext
+    ? `\n\nI searched the web for you and gathered this up-to-date context. Use it to make the project accurate, realistic and current (correct package names, API endpoints, prices, platforms, etc.):\n${extraContext}`
+    : '';
   const system = `${AGENT_IDENTITY}\n\nYou are also an expert software engineer. Generate a complete, runnable ${language || ''} project from the user's description.
 Respond with JSON ONLY in this exact shape (no markdown fences):
 {
@@ -830,7 +1036,8 @@ Requirements:
 - Every file path must be relative (e.g. "src/app.py", "index.html").
 - Escape all newlines inside file strings properly.
 - Include a README.md with setup + run instructions.
-- Keep the project focused and minimal but complete and runnable.`;
+- Keep the project focused and minimal but complete and runnable.
+- For a todo list, expense tracker or any small app, generate the FULL working application (real add/edit/delete, local storage), not a stub.${researchBlock}`;
 
   try {
     const raw = await callLLM({
@@ -839,10 +1046,11 @@ Requirements:
         { role: 'system', content: system },
         { role: 'user', content: description },
       ],
-      maxTokens: 4000,
+      maxTokens: 5000,
       temperature: 0.3,
       jsonMode: true,
-      timeoutMs: 180000,
+      timeoutMs: 120000,
+      task: 'code',
     });
     const parsed = extractJson(raw);
     if (parsed && parsed.files && typeof parsed.files === 'object') {
@@ -947,20 +1155,9 @@ async function handleChat(request, env) {
     let searchSuggestions = [];
     const wantsWeb = mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false);
     if (wantsWeb) {
-      const searxng = await searchSearxng(userMessage, 'all', 6);
-      if (searxng) {
-        searchResults = cleanSearchResults(searxng.results || []);
-        searchSuggestions = searxng.suggestions || [];
-      }
-      if (searchResults.length < 3) {
-        const ddg = cleanSearchResults(await duckDuckGoHtmlSearch(userMessage, 8));
-        searchResults = [...searchResults, ...ddg];
-      }
-      if (searchResults.length < 3) {
-        const bing = cleanSearchResults(await bingSearch(userMessage, 8));
-        searchResults = [...searchResults, ...bing];
-      }
-      searchResults = dedupeByUrl(searchResults).slice(0, 8);
+      const found = await searchFromWeb(userMessage, 8);
+      searchResults = found;
+      searchSuggestions = [];
     }
 
     const context =
@@ -989,7 +1186,8 @@ async function handleChat(request, env) {
         messages,
         maxTokens: isSimple ? 800 : 1600,
         temperature: 0.7,
-        timeoutMs: 180000,
+        timeoutMs: 30000,
+        task: 'chat',
       });
     } catch (e) {
       llmFailed = true;
@@ -1071,50 +1269,112 @@ async function handleProjectGenerate(request, env) {
   }
 }
 
+async function handleAgentBuild(request, env) {
+  try {
+    const body = await request.json();
+    const description = (body.description || body.message || '').trim();
+    if (!description) return respondError('Description is required', 400);
+    const language = body.language;
+
+    // 1. Search the web for up-to-date context before writing any code.
+    let sources = [];
+    let extraContext = '';
+    try {
+      const searchResults = await searchFromWeb(description, 6);
+      sources = cleanSearchResults(searchResults).slice(0, 6).map((r) => ({
+        title: r.title,
+        url: r.url,
+        content: r.content || r.snippet || '',
+      }));
+      if (sources.length > 0) {
+        extraContext = sources
+          .map((r) => `- ${r.title}\n  URL: ${r.url}\n  ${(r.content || '').slice(0, 400)}`)
+          .join('\n\n');
+      }
+    } catch (_) {
+      // Search is best-effort; still build the project without it.
+    }
+
+    // 2. Generate the complete, runnable project enriched with that context.
+    const project = await generateProject(env, description, language, extraContext);
+
+    const builtMessage = `I searched the web and built **${project.project_name}** (${project.language}) for you.\n\n${project.summary}\n\n${
+      sources.length > 0
+        ? `I used current web information from ${sources.length} source${sources.length === 1 ? '' : 's'} while building it.\n`
+        : ''
+    }Your project files are ready to be created on your device. Review them below and grant folder permission when asked to save them.`;
+
+    return respondJson({
+      response: builtMessage,
+      session_id: body.session_id || '',
+      type: 'project',
+      mode: 'project',
+      is_simple: false,
+      sources,
+      suggestions: buildSuggestions(description, []),
+      project,
+    });
+  } catch (error) {
+    console.error('Agent build error:', error.message);
+    return respondError('Project build failed. Please try again.', 502);
+  }
+}
+
 async function handleSearch(request) {
   const url = new URL(request.url);
   const query = url.searchParams.get('q');
   if (!query) return respondError('Missing query parameter', 400);
   const category = url.searchParams.get('category') || 'all';
 
-  const searxngResult = await searchSearxng(query, category, 50);
-  if (searxngResult) {
-    return respondJson({
-      results: cleanSearchResults(searxngResult.results),
-      suggestions: searxngResult.suggestions || [],
-      infoboxes: searxngResult.infoboxes || [],
-      answers: searxngResult.answers || [],
-      number_of_results: searxngResult.numberOfResults || null,
-    });
-  }
+  // Fire every search engine in parallel so results come back fast and cover
+  // the whole internet, not just a handful of sites.
+  const [searxngResult, ddgHtml, bing, wiki, ddgApi, mojeek, startpage] = await Promise.all([
+    searchSearxng(query, category, 50),
+    withTimeout(duckDuckGoHtmlSearch(query, 20), 8000).catch(() => []),
+    withTimeout(bingSearch(query, 15), 8000).catch(() => []),
+    withTimeout(wikipediaSearch(query, 8), 5000).catch(() => []),
+    withTimeout(duckDuckGoApiSearch(query, 10), 6000).catch(() => []),
+    withTimeout(mojeekSearch(query, 15), 7000).catch(() => []),
+    withTimeout(startpageSearch(query, 15), 7000).catch(() => []),
+  ]);
 
-  if (category === 'all' || category === 'web') {
-    const ddgHtmlResults = cleanSearchResults(await duckDuckGoHtmlSearch(query, 20));
-    if (ddgHtmlResults.length > 0) {
-      return respondJson({ results: ddgHtmlResults, suggestions: [], infoboxes: [], answers: [], number_of_results: null });
-    }
-    const bingResults = cleanSearchResults(await bingSearch(query, 12));
-    if (bingResults.length > 0) {
-      return respondJson({ results: bingResults, suggestions: [], infoboxes: [], answers: [], number_of_results: null });
-    }
-    const ddgApiResults = cleanSearchResults(await duckDuckGoApiSearch(query, 10));
-    if (ddgApiResults.length > 0) {
-      return respondJson({ results: ddgApiResults, suggestions: [], infoboxes: [], answers: [], number_of_results: null });
-    }
-    const wikiResults = cleanSearchResults(await wikipediaSearch(query, 8));
-    if (wikiResults.length > 0) {
-      return respondJson({ results: wikiResults, suggestions: [], infoboxes: [], answers: [], number_of_results: null });
-    }
+  let merged = [];
+  let suggestions = [];
+  let infoboxes = [];
+  let answers = [];
+  let numberOfResults = null;
+
+  if (searxngResult && Array.isArray(searxngResult.results)) {
+    merged.push(...searxngResult.results);
+    suggestions = searxngResult.suggestions || [];
+    infoboxes = searxngResult.infoboxes || [];
+    answers = searxngResult.answers || [];
+    numberOfResults = searxngResult.numberOfResults || null;
   }
+  const toMerged = (list) =>
+    (list || []).map((r) => ({
+      title: r.title || '',
+      url: r.url || '',
+      content: r.snippet || r.content || '',
+      img_src: r.img_src || null,
+      publishedDate: r.publishedDate || null,
+    }));
+  merged.push(...toMerged(ddgHtml), ...toMerged(bing), ...toMerged(wiki), ...toMerged(ddgApi), ...toMerged(mojeek), ...toMerged(startpage));
 
   if (category === 'images') {
     const commonsResults = await commonsImageSearch(query, 10);
-    if (commonsResults.length > 0) {
-      return respondJson({ results: commonsResults, suggestions: [], infoboxes: [], answers: [], number_of_results: null });
-    }
+    merged.push(...toMerged(commonsResults));
   }
 
-  return respondJson({ results: [], suggestions: [], infoboxes: [], answers: [] });
+  merged = cleanSearchResults(dedupeByUrl(merged)).slice(0, 50);
+
+  return respondJson({
+    results: merged,
+    suggestions,
+    infoboxes,
+    answers,
+    number_of_results: numberOfResults,
+  });
 }
 
 async function handleImageProxy(request) {
@@ -1242,6 +1502,11 @@ async function handleRequest(request, env) {
     case '/api/project/generate':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);
       return handleProjectGenerate(request, env);
+
+    case '/v1/agent/build':
+    case '/api/agent/build':
+      if (request.method !== 'POST') return respondError('Method not allowed', 405);
+      return handleAgentBuild(request, env);
 
     case '/v1/image/generate':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);

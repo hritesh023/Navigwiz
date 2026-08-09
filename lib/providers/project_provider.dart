@@ -158,6 +158,8 @@ class ProjectProvider extends ChangeNotifier {
     }
   }
 
+  String get defaultProjectRoot => _defaultProjectRoot();
+
   Future<String> saveAgentProject(AgentProject project) async {
     if (kIsWeb) {
       return ProjectArchiveService.saveToDevice(project);

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/project_provider.dart';
 import '../services/ai_service.dart';
+import '../utils/project_confirm.dart';
 
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
@@ -238,7 +239,7 @@ class _ProjectScreenState extends State<ProjectScreen> {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
 
     try {
-      final result = await aiService.generateProjectAgent(
+      final result = await aiService.buildProjectAgent(
         descriptionController.text.trim(),
         language: language,
       );
@@ -255,6 +256,12 @@ class _ProjectScreenState extends State<ProjectScreen> {
         ));
         return;
       }
+
+      final location = kIsWeb
+          ? 'a folder you choose (the browser will ask permission)'
+          : provider.defaultProjectRoot;
+      final allowed = await confirmProjectSave(context, result.project!, location);
+      if (!allowed || !mounted) return;
 
       final savedPath = await provider.saveAgentProject(result.project!);
       if (!mounted) return;

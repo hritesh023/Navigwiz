@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:typed_data';
 import '../models/workspace.dart';
+import '../services/workspace_file_service.dart';
 
 class WorkspaceProvider extends ChangeNotifier {
   List<Workspace> _workspaces = [];
@@ -137,4 +139,76 @@ class WorkspaceProvider extends ChangeNotifier {
     }
     return results;
   }
+
+  /// Creates a document as a real file (markdown) in the workspace folder and
+  /// adds it to the workspace.
+  Future<String?> createDocument(
+      String workspaceId, String title, String content) async {
+    final index = _workspaces.indexWhere((w) => w.id == workspaceId);
+    if (index == -1) return null;
+    final ws = _workspaces[index];
+    final safeTitle = title.trim().isEmpty ? 'note' : title.trim();
+    final location =
+        await WorkspaceFileService.saveText(ws.name, '$safeTitle.md', content);
+    await addItemToWorkspace(
+      workspaceId,
+      WorkspaceItem(
+        id: 'item_${DateTime.now().millisecondsSinceEpoch}',
+        type: 'note',
+        title: safeTitle,
+        content: content,
+        filePath: location,
+      ),
+    );
+    return location;
+  }
+
+  /// Saves an AI-generated image as a real file (PNG) in the workspace folder
+  /// and adds it to the workspace.
+  Future<String?> createImage(
+      String workspaceId, String title, Uint8List bytes) async {
+    final index = _workspaces.indexWhere((w) => w.id == workspaceId);
+    if (index == -1) return null;
+    final ws = _workspaces[index];
+    final safeTitle = title.trim().isEmpty ? 'image' : title.trim();
+    final location =
+        await WorkspaceFileService.saveBytes(ws.name, '$safeTitle.png', bytes);
+    await addItemToWorkspace(
+      workspaceId,
+      WorkspaceItem(
+        id: 'item_${DateTime.now().millisecondsSinceEpoch}',
+        type: 'image',
+        title: safeTitle,
+        content: 'Generated image',
+        filePath: location,
+      ),
+    );
+    return location;
+  }
+
+  /// Exports every item in the workspace as real markdown files into the
+  /// workspace folder. Returns the folder location or null if not found.
+  Future<String?> exportWorkspace(String workspaceId) async {
+    final index = _workspaces.indexWhere((w) => w.id == workspaceId);
+    if (index == -1) return null;
+    final ws = _workspaces[index];
+
+    String? last;
+    for (var i = 0; i < ws.items.length; i++) {
+      final item = ws.items[i];
+      final base = '${_safeName(item.title)}-${i + 1}';
+      final content = [
+        if (item.content.isNotEmpty) item.content,
+        if (item.url != null && item.url!.isNotEmpty)
+          'Source: ${item.url}',
+      ].join('\n\n');
+      last = await WorkspaceFileService.saveText(ws.name, '$base.md', content);
+    }
+    return last == null ? null : ws.name;
+  }
+
+  String _safeName(String s) =>
+      s.replaceAll(RegExp(r'[^\w.\- ]'), '').trim().isEmpty
+          ? 'item'
+          : s.replaceAll(RegExp(r'[^\w.\- ]'), '').trim();
 }

@@ -6,11 +6,12 @@ from app.config.settings import settings
 
 router = APIRouter()
 
-OPENROUTER_API_KEY = settings.openai_api_key or ""
-OPENROUTER_MODEL = "openai/gpt-4o-mini"
+ORACLE_LLM_URL = os.getenv("ORACLE_LLM_URL", "https://oracle.acronous.com")
+ORACLE_LLM_MODEL = os.getenv("ORACLE_LLM_MODEL", "qwen2.5:1.5b")
+ORACLE_LLM_KEY = os.getenv("ORACLE_LLM_KEY", "")
 
 
-async def _call_openrouter(messages: list, model: str = OPENROUTER_MODEL, stream: bool = False):
+async def _call_llm(messages: list, model: str = ORACLE_LLM_MODEL, stream: bool = False):
     body = {
         "model": model,
         "messages": messages,
@@ -20,19 +21,18 @@ async def _call_openrouter(messages: list, model: str = OPENROUTER_MODEL, stream
     if stream:
         body["stream"] = True
     import httpx
+    headers = {
+        "Authorization": f"Bearer {ORACLE_LLM_KEY}",
+        "Content-Type": "application/json",
+    }
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            f"{ORACLE_LLM_URL}/v1/chat/completions",
             json=body,
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://navigwiz.app",
-                "X-Title": "Navigwiz",
-            },
+            headers=headers,
         )
         if not resp.is_success:
-            raise HTTPException(502, f"OpenRouter error: {resp.status_code}")
+            raise HTTPException(502, f"LLM error: {resp.status_code}")
         return resp.json()
 
 
@@ -54,8 +54,6 @@ async def v1_ready():
 
 @router.get("/v1/health/llm")
 async def v1_health_llm():
-    if not OPENROUTER_API_KEY:
-        return {"status": "unavailable"}
     return {"status": "ok"}
 
 
@@ -83,7 +81,7 @@ async def v1_chat(request: Request):
         {"role": "system", "content": "You are Navigwiz AI assistant. Provide accurate, helpful responses."},
         {"role": "user", "content": message},
     ]
-    data = await _call_openrouter(messages)
+    data = await _call_llm(messages)
     content = _sanitize(data["choices"][0]["message"]["content"])
     return {"response": content, "session_id": session_id, "type": "chat"}
 
@@ -104,24 +102,23 @@ async def v1_chat_stream(request: Request):
 
     async def event_stream():
         import httpx
-        openrouter_body = {
-            "model": OPENROUTER_MODEL,
+        llm_body = {
+            "model": ORACLE_LLM_MODEL,
             "messages": messages,
             "max_tokens": 4096,
             "temperature": 0.7,
             "stream": True,
         }
+        headers = {
+            "Authorization": f"Bearer {ORACLE_LLM_KEY}",
+            "Content-Type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream(
                 "POST",
-                "https://openrouter.ai/api/v1/chat/completions",
-                json=openrouter_body,
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://acronous.com",
-                    "X-Title": "Acronous AI",
-                },
+                f"{ORACLE_LLM_URL}/v1/chat/completions",
+                json=llm_body,
+                headers=headers,
             ) as resp:
                 buffer = ""
                 async for chunk in resp.aiter_bytes():
@@ -166,7 +163,7 @@ async def api_chat(request: Request):
         {"role": "system", "content": "You are Acronous AI assistant."},
         {"role": "user", "content": query},
     ]
-    data = await _call_openrouter(messages)
+    data = await _call_llm(messages)
     content = _sanitize(data["choices"][0]["message"]["content"])
     return {"content": content, "type": "chat", "session_id": session_id, "sources": [], "analysis": None}
 
@@ -187,7 +184,7 @@ async def v1_chat_image(file: UploadFile = File(...), message: str = Form(""), s
         {"role": "system", "content": "You are Acronous AI. Analyze images in detail."},
         {"role": "user", "content": content},
     ]
-    data = await _call_openrouter(messages)
+    data = await _call_llm(messages)
     response_text = _sanitize(data["choices"][0]["message"]["content"])
     return {
         "response": response_text, "session_id": session_id, "type": "chat",
@@ -210,7 +207,7 @@ async def v1_chat_file(file: UploadFile = File(...), message: str = Form(""), se
         {"role": "system", "content": "You are Acronous AI. Analyze files thoroughly."},
         {"role": "user", "content": full_message},
     ]
-    data = await _call_openrouter(messages)
+    data = await _call_llm(messages)
     response_text = _sanitize(data["choices"][0]["message"]["content"])
     return {
         "response": response_text, "session_id": session_id, "type": "chat",
@@ -344,7 +341,7 @@ async def api_image_analyze(file: UploadFile = File(...), session_id: str = Form
         {"role": "system", "content": "You are an image analysis AI."},
         {"role": "user", "content": content},
     ]
-    data = await _call_openrouter(messages)
+    data = await _call_llm(messages)
     analysis = _sanitize(data["choices"][0]["message"]["content"])
     return {"content": analysis, "type": "analysis", "session_id": session_id}
 

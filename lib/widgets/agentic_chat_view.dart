@@ -7,6 +7,7 @@ import '../providers/project_provider.dart';
 import '../screens/project_screen.dart';
 import '../services/ai_service.dart';
 import '../services/browser_service.dart';
+import '../utils/project_confirm.dart';
 import 'markdown_body.dart';
 
 class AgenticChatView extends StatefulWidget {
@@ -89,7 +90,7 @@ class _AgenticChatViewState extends State<AgenticChatView> {
     } else if (_mode == 'research') {
       result = await aiService.runResearchAgent(text);
     } else if (_mode == 'project') {
-      result = await aiService.generateProjectAgent(text);
+      result = await aiService.buildProjectAgent(text);
     } else {
       result = await aiService.sendAgentMessage(
         text,
@@ -679,6 +680,13 @@ class _ProjectCardState extends State<_ProjectCard> {
   Future<void> _save() async {
     final provider =
         Provider.of<ProjectProvider>(context, listen: false);
+    final location = kIsWeb
+        ? 'a folder you choose (the browser will ask permission)'
+        : provider.defaultProjectRoot;
+    final allowed =
+        await confirmProjectSave(context, widget.project, location);
+    if (!allowed || !mounted) return;
+
     setState(() => _saving = true);
     try {
       final savedPath =

@@ -498,6 +498,49 @@ class AIService extends ChangeNotifier {
     }
   }
 
+  /// Agentic build: the AI first searches the web for up-to-date context, then
+  /// creates a complete runnable project (real files/folders) for the user.
+  Future<AgentResponse> buildProjectAgent(
+    String description, {
+    String? language,
+  }) async {
+    if (!AppConfig.hasWorker) {
+      return const AgentResponse(
+        response: 'AI service is not configured.',
+        isSimple: true,
+      );
+    }
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.workerUrl}/v1/agent/build'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'description': description,
+              if (language != null) 'language': language,
+              'session_id': 'navigwiz',
+            }),
+          )
+          .timeout(_agentTimeout);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = json.decode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return AgentResponse.fromJson(decoded);
+        }
+      }
+      return AgentResponse(
+        response: 'Project build returned an error (${response.statusCode}).',
+        isSimple: true,
+      );
+    } catch (_) {
+      return const AgentResponse(
+        response: 'Could not reach the AI service. Please check your connection and try again.',
+        isSimple: true,
+      );
+    }
+  }
+
   Future<String> generateImage(String prompt) async {
     if (!AppConfig.hasWorker) return '';
     try {

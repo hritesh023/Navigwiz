@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -122,8 +124,160 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
-  void _showAttachmentPicker() {
-    showModalBottomSheet(
+  Future<void> _createDocument() async {
+    final titleController = TextEditingController();
+    final contentController = TextEditingController();
+    final wp = Provider.of<WorkspaceProvider>(context, listen: false);
+    if (wp.activeWorkspace == null) return;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Create Document',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Document title',
+                border: OutlineInputBorder(),
+              ),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: contentController,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                labelText: 'Content',
+                border: OutlineInputBorder(),
+              ),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Create File'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true || !mounted) return;
+
+    final title = titleController.text.trim().isEmpty
+        ? 'Document'
+        : titleController.text.trim();
+    final location = await wp.createDocument(
+        wp.activeWorkspace!.id, title, contentController.text);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(location == null
+          ? 'Could not create the document.'
+          : 'Document created as a real file${location.contains('/') || location.contains('\\') ? ': $location' : ''}'),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  Future<void> _createAiImage() async {
+    final promptController = TextEditingController();
+    final wp = Provider.of<WorkspaceProvider>(context, listen: false);
+    if (wp.activeWorkspace == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Create Image with AI',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+        content: TextField(
+          controller: promptController,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'Describe the image you want...',
+            border: OutlineInputBorder(),
+          ),
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (promptController.text.trim().isNotEmpty) {
+                Navigator.pop(ctx, true);
+              }
+            },
+            child: const Text('Generate'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Generating your image...'),
+          duration: Duration(seconds: 2)),
+    );
+
+    final aiService = Provider.of<AIService>(context, listen: false);
+    final imageData = await aiService.generateImage(promptController.text.trim());
+    if (imageData.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not generate the image.')));
+      }
+      return;
+    }
+
+    final bytes = Uint8List.fromList(base64Decode(imageData));
+    final title = promptController.text.trim();
+    final location = await wp.createImage(wp.activeWorkspace!.id, title, bytes);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(location == null
+          ? 'Could not save the image.'
+          : 'Image saved${location.contains('/') || location.contains('\\') ? ' to $location' : ''}.'),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  Future<void> _exportWorkspace() async {
+    final wp = Provider.of<WorkspaceProvider>(context, listen: false);
+    if (wp.activeWorkspace == null) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Exporting workspace to your files...'),
+          duration: Duration(seconds: 2)),
+    );
+
+    final folder = await wp.exportWorkspace(wp.activeWorkspace!.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(folder == null
+          ? 'Could not export the workspace.'
+          : 'Workspace exported as real files.'),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  void _showAttachmentPicker() {    showModalBottomSheet(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
@@ -174,6 +328,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   _AttachmentOption(
                     icon: Icons.link_outlined, label: 'Link',
                     onTap: () { Navigator.pop(ctx); _showLinkDialog(); },
+                  ),
+                  const SizedBox(width: 4),
+                  _AttachmentOption(
+                    icon: Icons.note_add_outlined, label: 'Create Doc',
+                    onTap: () { Navigator.pop(ctx); _createDocument(); },
+                  ),
+                  _AttachmentOption(
+                    icon: Icons.auto_fix_high, label: 'AI Image',
+                    onTap: () { Navigator.pop(ctx); _createAiImage(); },
                   ),
                 ],
               ),
@@ -353,6 +516,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
         title: const Text('Workspace'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.ios_share),
+            tooltip: 'Export workspace as files',
+            onPressed: _exportWorkspace,
+          ),
           IconButton(
             icon: const Icon(Icons.add_rounded),
             tooltip: 'New workspace tab',

@@ -1,4 +1,3 @@
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const SEARXNG_URLS = [
   'https://searx.be/search',
   'https://search.sapti.me/search',
@@ -35,9 +34,8 @@ function respondError(message, status = 500) {
 
 async function handleChat(request, env) {
   try {
-    const apiKey = env.OPENAI_API_KEY || env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return respondError('AI API key not configured on server.', 500);
+    if (!env || !env.AI || typeof env.AI.run !== 'function') {
+      return respondError('AI service not configured on server.', 500);
     }
 
     const body = await request.json();
@@ -52,8 +50,8 @@ async function handleChat(request, env) {
 
     const isFileRequest = /pdf|document|file/i.test(userMessage);
 
-    const openaiBody = {
-      model: body.model || 'openai/gpt-4o-mini',
+    const model = body.model || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    const response = await env.AI.run(model, {
       messages: [
         {
           role: 'system',
@@ -63,28 +61,11 @@ async function handleChat(request, env) {
         },
         { role: 'user', content: enhancedMessage },
       ],
-      max_tokens: isFileRequest ? 4096 : 2048,
-    };
-
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://navigwiz.app',
-        'X-Title': 'Navigwiz',
-      },
-      body: JSON.stringify(openaiBody),
+      max_tokens: isFileRequest ? 3500 : 2048,
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`OpenRouter API error: ${response.status}`, text);
-      return respondError('AI service error. Please try again.', 502);
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
+    const content =
+      (response && (response.response || response.output_text || response.output || '')) || '';
 
     if (isFileRequest) {
       const typeMatch = content.match(/\[FILE_TYPE:\s*(\w+)\]/);

@@ -11,6 +11,7 @@ import 'services/logging_service.dart';
 import 'services/analytics_service.dart';
 import 'services/update_service.dart';
 import 'services/service_worker_updater.dart';
+import 'services/window_control_service.dart';
 import 'services/central_auth_service.dart';
 import 'providers/chat_provider.dart';
 import 'providers/auth_provider.dart';
@@ -83,6 +84,7 @@ void main(List<String> args) async {
   browserService.setHomepageUrl(settingsProvider.homepageUrl);
 
   if (!kIsWeb) {
+    await WindowControlService.initialize();
     await browserService.initialize(initialUrl: _initialUrlFromArgs(args));
   }
 

@@ -2,14 +2,18 @@ name = "navigwiz-ai"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 
+[ai]
+binding = "AI"
+
 [vars]
 ENVIRONMENT = "production"
 ORACLE_LLM_URL = "https://oracle.acronous.com"
-ORACLE_LLM_MODEL = "qwen2.5:14b"
+ORACLE_LLM_MODEL = "qwen2.5:1.5b"
 ORACLE_LLM_KEY = ""
 
 [env.production]
-vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", ORACLE_LLM_URL = "https://oracle.acronous.com", ORACLE_LLM_MODEL = "qwen2.5:14b" }
+ai = { binding = "AI" }
+vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", ORACLE_LLM_URL = "https://oracle.acronous.com", ORACLE_LLM_MODEL = "qwen2.5:1.5b", ORACLE_LLM_KEY = "" }
 routes = [
   { pattern = "navigwiz-ai.acronous.com", custom_domain = true },
 ]

@@ -1,25 +1,18 @@
 import 'dart:js_interop';
-import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 import '../models/agent_response.dart';
 
-void zipDownload(Uint8List bytes, String filename) {
-  final blob = web.Blob(
-    [bytes.toJS].toJS,
-    web.BlobPropertyBag(type: 'application/zip'),
-  );
-  final url = web.URL.createObjectURL(blob);
-  final anchor = web.HTMLAnchorElement()
-    ..href = url
-    ..download = filename;
-  anchor.click();
-  web.URL.revokeObjectURL(url);
-}
-
+/// Web implementation: writes a generated project as real files into a folder
+/// the user chooses through the browser's File System Access API (this is the
+/// permission gate — the browser asks the user for access to that folder).
+///
+/// If the user cancels the permission dialog, nothing is downloaded and no
+/// files are written.
 Future<String> saveToDevice(AgentProject project) async {
   final root = await _pickDirectory();
   if (root == null) {
-    return _downloadProjectFiles(project);
+    return 'You cancelled the folder permission. The project files were not saved. '
+        'Tap Save Project again and choose a folder to create the files.';
   }
 
   final safeName = _sanitize(project.name.isEmpty ? 'project' : project.name);
@@ -67,27 +60,7 @@ Future<String> saveToDevice(AgentProject project) async {
 
   return written == 0
       ? 'No files were saved.'
-      : 'Saved $written file${written == 1 ? '' : 's'} to $safeName';
-}
-
-String _downloadProjectFiles(AgentProject project) {
-  for (final file in project.files) {
-    final name = file.path.split('/').where((s) => s.isNotEmpty).lastOrNull;
-    if (name == null) continue;
-    final blob = web.Blob(
-      [file.content.toJS].toJS,
-      web.BlobPropertyBag(type: 'text/plain;charset=utf-8'),
-    );
-    final url = web.URL.createObjectURL(blob);
-    final anchor = web.HTMLAnchorElement()
-      ..href = url
-      ..download = name;
-    anchor.click();
-    web.URL.revokeObjectURL(url);
-  }
-  return project.files.isEmpty
-      ? 'No files were saved.'
-      : 'Downloaded ${project.files.length} file${project.files.length == 1 ? '' : 's'} to your Downloads folder';
+      : 'Created $written file${written == 1 ? '' : 's'} in $safeName';
 }
 
 Future<web.FileSystemDirectoryHandle?> _pickDirectory() async {

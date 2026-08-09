@@ -15,7 +15,7 @@ class AcronousChatPage extends StatelessWidget {
         backgroundColor: theme.colorScheme.surface,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => Navigator.pop(context, true),
         ),
       ),
       body: const AgenticChatView(

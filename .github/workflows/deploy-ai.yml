@@ -83,8 +83,9 @@ jobs:
         npx wrangler deploy --env production
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        ORACLE_LLM_URL: ${{ secrets.ORACLE_LLM_URL }}
+        ORACLE_LLM_MODEL: ${{ secrets.ORACLE_LLM_MODEL }}
+        ORACLE_LLM_KEY: ${{ secrets.ORACLE_LLM_KEY }}
         
     - name: Verify deployment
       run: |

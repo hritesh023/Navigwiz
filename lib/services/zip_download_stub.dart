@@ -1,6 +1,4 @@
-import 'dart:typed_data';
 import '../models/agent_response.dart';
 
-void zipDownload(Uint8List bytes, String filename) {}
-
-Future<String> saveToDevice(AgentProject project) async => '';
+Future<String> saveToDevice(AgentProject project) async =>
+    'Saving projects to your device is not supported on this platform.';

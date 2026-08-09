@@ -1,11 +1,15 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'package:archive/archive.dart';
 import '../models/agent_response.dart';
 import 'zip_download_stub.dart'
     if (dart.library.js_interop) 'zip_download_web.dart' as impl;
 
+/// Persists AI-generated projects as real files on the user's device.
+///
+/// On desktop/mobile this writes directly into a folder under the project
+/// root (default `~/NavigwizProjects`). On web it asks the user for folder
+/// permission via the browser File System Access API, then writes each file
+/// into the chosen folder. No zip/download involved — files are created for
+/// real, just like a local coding agent would.
 class ProjectArchiveService {
   static Future<String> saveToDisk(String rootDir, AgentProject project) async {
     final safeName = _sanitize(project.name.isEmpty ? 'project' : project.name);
@@ -37,22 +41,6 @@ class ProjectArchiveService {
       await target.writeAsString(file.content);
     }
     return projectDir.path;
-  }
-
-  static Future<Uint8List> buildZip(AgentProject project) async {
-    final archive = Archive();
-    for (final file in project.files) {
-      final contentBytes = utf8.encode(file.content);
-      archive.addFile(
-          ArchiveFile(file.path, contentBytes.length, contentBytes));
-    }
-    final data = ZipEncoder().encode(archive);
-    if (data == null) return Uint8List(0);
-    return Uint8List.fromList(data);
-  }
-
-  static void downloadZip(Uint8List bytes, String filename) {
-    impl.zipDownload(bytes, filename);
   }
 
   static Future<String> saveToDevice(AgentProject project) =>
