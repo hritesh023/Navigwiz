@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/agent_response.dart';
 import '../services/ai_service.dart';
 import '../services/browser_service.dart';
 import 'markdown_body.dart';
@@ -34,31 +37,23 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
       _isAiLoading = true;
     });
 
-    // 1) Web results + photos first (fast), so the page appears instantly.
-    // 2) AI Overview streams in at the TOP as soon as it is ready — the AI
-    //    answer always comes first in the layout, links/photos follow below.
-    final response = await aiService.searchWithOverview(
+    // Results page + AI answer fire TOGETHER in parallel (not serially):
+    // links render as soon as /search returns (~1s) while the single
+    // /v1/chat roundtrip (fast search + LLM) lands the AI Overview on top
+    // when ready. Total wait = max, never sum.
+    final resultsFuture = aiService.searchWithOverview(
       widget.query,
       forceRefresh: true,
       waitForAi: false,
     );
+    final aiFuture =
+        aiService.sendAgentMessage(widget.query, mode: 'web_search');
 
-    if (!mounted) return;
-    setState(() {
-      _searchResponse = response;
-      _isLoading = false;
-      // Keep the AI skeleton visible at the top until the answer arrives.
-      _isAiLoading = true;
-    });
-
-    final aiAnswer =
-        await aiService.getAiAnswerForSearch(response.results, widget.query);
-    if (!mounted) return;
-    setState(() {
-      _isAiLoading = false;
-      if (aiAnswer.isNotEmpty) {
+    unawaited(resultsFuture.then((response) {      if (!mounted) return;
+      setState(() {
+        final currentAi = _searchResponse?.aiAnswer ?? '';
         _searchResponse = SearchResponse(
-          aiAnswer: aiAnswer,
+          aiAnswer: currentAi,
           results: response.results,
           imageResults: response.imageResults,
           newsResults: response.newsResults,
@@ -70,8 +65,62 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
           resultCount: response.resultCount,
           searchTime: response.searchTime,
         );
-      }
-    });
+        _isLoading = false;
+      });
+    }).catchError((_) {
+      if (mounted) setState(() => _isLoading = false);
+    }));
+
+    unawaited(aiFuture.then((agent) {
+      if (!mounted) return;
+      setState(() {
+        _isAiLoading = false;
+        final answer = agent.response.trim();
+        final current = _searchResponse;
+        if (answer.isNotEmpty) {
+          _searchResponse = SearchResponse(
+            aiAnswer: answer,
+            results: current?.results ?? _agentSourcesAsResults(agent),
+            imageResults: current?.imageResults ?? const [],
+            newsResults: current?.newsResults ?? const [],
+            videoResults: current?.videoResults ?? const [],
+            bookResults: current?.bookResults ?? const [],
+            suggestions: current?.suggestions ?? const [],
+            infoboxes: current?.infoboxes ?? const [],
+            answers: current?.answers ?? const [],
+            resultCount: current?.resultCount,
+            searchTime: current?.searchTime ?? '',
+          );
+        } else if (current == null) {
+          // Chat empty but finished: fall back to agent sources as links.
+          final fallback = _agentSourcesAsResults(agent);
+          if (fallback.isNotEmpty) {
+            _searchResponse = SearchResponse(
+              aiAnswer: '',
+              results: fallback,
+              resultCount: fallback.length,
+            );
+          }
+        }
+      });
+    }).catchError((_) {
+      if (mounted) setState(() => _isAiLoading = false);
+    }));
+  }
+
+  /// Converts agent sources to result cards so the page never ends up with
+  /// links missing when /search returns empty but chat found sources.
+  List<SearchResult> _agentSourcesAsResults(AgentResponse agent) {
+    return agent.sources
+        .where((s) => s.title.isNotEmpty && s.url.isNotEmpty)
+        .take(10)
+        .map((s) => SearchResult(
+              title: s.title,
+              url: s.url,
+              description: s.snippet,
+              relevanceScore: 0.8,
+            ))
+        .toList();
   }
 
   void _openUrl(String url) {

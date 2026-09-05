@@ -104,7 +104,6 @@ class AIMessage {
 }
 
 class AIService extends ChangeNotifier {
-  static const Duration _searchTimeout = Duration(seconds: 8);
   static const int _maxResults = 50;
 
   final SecureStorageService _secureStorage = SecureStorageService();
@@ -179,21 +178,22 @@ class AIService extends ChangeNotifier {
     List<String> answers = [];
     int? resultCount;
 
-    final fullResponse = await _searchFull(query, forceRefresh: forceRefresh);
+    // Web results + photos fire TOGETHER (not serially): total wait is the
+    // slower of the two, not the sum. Best-effort on images.
+    final webFuture = _searchFull(query, forceRefresh: forceRefresh);
+    final imagesFuture = searchImages(query).timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => const <SearchResult>[],
+    ).catchError((_) => const <SearchResult>[]);
+
+    final fullResponse = await webFuture;
     results = fullResponse.results;
     suggestions = fullResponse.suggestions;
     infoboxes = fullResponse.infoboxes;
     answers = fullResponse.answers;
     resultCount = fullResponse.resultCount;
-
-    // Photos are fetched in parallel so image-heavy questions ("photos of…",
-    // "what does X look like") get a visual strip without slowing the AI
-    // overview. Best-effort: never fails the whole search.
     try {
-      imageResults = await searchImages(query).timeout(
-        const Duration(seconds: 6),
-        onTimeout: () => const <SearchResult>[],
-      );
+      imageResults = await imagesFuture;
     } catch (_) {
       imageResults = const <SearchResult>[];
     }
@@ -221,27 +221,53 @@ class AIService extends ChangeNotifier {
   /// AI Overview: always answers FIRST with the power of AI (latest, correct),
   /// then the caller renders links/photos below it. Even with zero web
   /// results we still ask the AI directly so the user never gets a blank page.
+  ///
+  /// Uses the LLM-only `/v1/answer` endpoint over the sources we already
+  /// fetched — the backend does NOT search again, so the overview costs one
+  /// LLM call instead of a second full search + LLM roundtrip.
   Future<String> getAiAnswerForSearch(List<SearchResult> results, String query) async {
-    final now = DateTime.now().toUtc().toIso8601String();
-    const baseInstructions =
-        'You are the Navigwiz AI Overview. Answer the user query FIRST, directly and completely. '
-        'Rules: (1) Always give the appropriate, latest and correct answer — use the search results plus your knowledge and today\'s date. '
-        '(2) If the question needs current info (prices, scores, news, versions, dates), prefer the freshest search result. '
-        '(3) Structure: start with a direct answer in 1-3 sentences, then key details as short bullets when helpful. '
-        '(4) Cite sources inline by domain when you use them, e.g. (example.com). '
-        '(5) Never say you lack browsing or that knowledge is outdated. Be concise but complete.';
     try {
-      if (results.isEmpty) {
-        return await _askAi(
-          'Query: $query\n\nToday (UTC): $now\n\nNo web results were found. Answer from your knowledge as accurately and up-to-date as possible.',
-          extraInstructions: baseInstructions,
-        );
-      }
-      final sourceText = results.take(10).map((r) => '- ${r.title}\n  URL: ${r.url}\n  Snippet: ${r.description}').join('\n');
-      return await _askAi(
-        'Query: $query\n\nToday (UTC): $now\n\nSearch results:\n$sourceText',
-        extraInstructions: baseInstructions,
+      return await answerWithSources(
+        query,
+        results
+            .take(10)
+            .map((r) => {
+                  'title': r.title,
+                  'url': r.url,
+                  'content': r.description,
+                })
+            .toList(),
       );
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Single LLM call over caller-provided sources. No backend search runs.
+  Future<String> answerWithSources(
+    String query,
+    List<Map<String, String>> sources,
+  ) async {
+    if (!AppConfig.hasWorker) return '';
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.workerUrl}/v1/answer'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'query': query,
+              'sources': sources,
+              'session_id': 'navigwiz',
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = json.decode(response.body);
+        final text = decoded['response']?.toString() ?? '';
+        if (text.isNotEmpty) return text;
+      }
+      return '';
     } catch (_) {
       return '';
     }
@@ -317,33 +343,29 @@ class AIService extends ChangeNotifier {
   Future<List<SearchResult>> _searchViaWorker(String query, String category) async {
     if (!AppConfig.hasWorker) return [];
 
-    // One quick retry: transient worker hiccups shouldn't cost a full 8s wait.
-    for (var attempt = 0; attempt < 2; attempt++) {
-      try {
-        final uri = Uri.parse('${AppConfig.workerUrl}/search').replace(queryParameters: {
-          'q': query,
-          'category': category,
-        });
-        final response = await http.get(uri, headers: {'Accept': 'application/json'}).timeout(
-          attempt == 0 ? const Duration(seconds: 5) : _searchTimeout,
-        );
+    // Single fast attempt with a short timeout — the backend search path is
+    // now tightly budgeted (~2.5s), so a retry would just add serial latency.
+    try {
+      final uri = Uri.parse('${AppConfig.workerUrl}/search').replace(queryParameters: {
+        'q': query,
+        'category': category,
+      });
+      final response = await http.get(uri, headers: {'Accept': 'application/json'}).timeout(
+        const Duration(seconds: 5),
+      );
 
-        if (response.statusCode != 200) continue;
+      if (response.statusCode != 200) return [];
 
-        final decoded = json.decode(response.body);
-        if (decoded is! Map<String, dynamic>) return [];
+      final decoded = json.decode(response.body);
+      if (decoded is! Map<String, dynamic>) return [];
 
-        final rawResults = decoded['results'];
-        if (rawResults is! List || rawResults.isEmpty) return [];
+      final rawResults = decoded['results'];
+      if (rawResults is! List || rawResults.isEmpty) return [];
 
-        return _parseWorkerResults(rawResults);
-      } catch (_) {
-        if (attempt == 1) return [];
-        // Brief backoff before the single retry.
-        await Future.delayed(const Duration(milliseconds: 250));
-      }
+      return _parseWorkerResults(rawResults);
+    } catch (_) {
+      return [];
     }
-    return [];
   }
 
   List<SearchResult> _parseWorkerResults(List rawResults) {

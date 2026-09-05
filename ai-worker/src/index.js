@@ -1,18 +1,11 @@
-const SEARXNG_URLS = [
-  'https://oracle.acronous.com/search',
-  'https://searx.be/search',
-  'https://searx.work/search',
-  'https://searx.info/search',
-  'https://baresearch.org/search',
-  'https://search.sapti.me/search',
-  'https://searx.tiekoetter.com/search',
-  'https://searxng.site/search',
-  'https://search.hbubli.cc/search',
-  'https://opnxng.com/search',
-  'https://priv.au/search',
-  'https://search.inetol.net/search',
-];
-const DDG_HTML_URL = 'https://html.duckduckgo.com/html/';
+// ------------------------------------------------------------------ Search
+// Fast search stack (no DuckDuckGo / SearXNG scraping — both were slow and
+// frequently blocked, adding 3-8s to every answer):
+//   1. Brave Search Data API (official fast JSON API, <1s) when BRAVE_API_KEY
+//      is configured on the worker.
+//   2. Wikipedia API (fast keyless JSON API) as an always-on fallback.
+// General web questions are answered from these plus the LLM's knowledge,
+// so search never stalls the response.
 const ALLOWED_ORIGINS = '*';
 const DEFAULT_ORACLE_URL = 'https://oracle.acronous.com';
 const DEFAULT_ORACLE_MODEL = 'qwen2.5:14b';
@@ -84,7 +77,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
 async function extractPageContent(url, maxChars = 2000) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     const response = await fetch(url, {
       headers: {
         'User-Agent':
@@ -423,152 +416,41 @@ function cleanSearchResults(results) {
 }
 
 // ------------------------------------------------------------------ Search
-async function duckDuckGoApiSearch(query, maxResults = 8) {
+// Brave Search Data API: official fast JSON API (<1s). Used when
+// BRAVE_API_KEY is configured; skipped silently otherwise.
+async function braveSearch(env, query, maxResults = 10) {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    const response = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
-      { headers: { 'User-Agent': 'AcronousAI/1.0.0' }, signal: controller.signal }
+    const apiKey = (env && env.BRAVE_API_KEY) || '';
+    if (!apiKey) return [];
+    const response = await fetchWithTimeout(
+      `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(maxResults, 20)}&text_decorations=false&search_lang=en`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'X-Subscription-Token': apiKey,
+        },
+      },
+      2500
     );
-    clearTimeout(timeoutId);
     if (!response.ok) return [];
     const data = await response.json();
-    const results = [];
-    if (data.AbstractText && data.AbstractURL) {
-      results.push({ title: data.Heading || query, url: data.AbstractURL, snippet: data.AbstractText });
-    }
-    for (const topic of data.RelatedTopics || []) {
-      if (results.length >= maxResults) break;
-      if (topic.Text && topic.FirstURL) {
-        results.push({ title: topic.Text.split(' - ')[0], url: topic.FirstURL, snippet: topic.Text });
-      }
-      for (const sub of topic.Topics || []) {
-        if (results.length >= maxResults) break;
-        if (sub.Text && sub.FirstURL) {
-          results.push({ title: sub.Text.split(' - ')[0], url: sub.FirstURL, snippet: sub.Text });
-        }
-      }
-    }
-    return results;
-  } catch (_) {
-    return [];
-  }
-}
-
-async function duckDuckGoHtmlSearch(query, maxResults = 15) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
-    const response = await fetch(`${DDG_HTML_URL}?q=${encodeURIComponent(query)}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!response.ok) return [];
-
-    const body = await response.text();
-    const results = [];
-    const resultRegex = /<a[^>]*class="result__a[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gs;
-    const snippetRegex = /class="result__snippet[^"]*"[^>]*>(.*?)<\/(?:a|div|span)>/gs;
-    const linkMatches = [...body.matchAll(resultRegex)];
-    const snippetMatches = [...body.matchAll(snippetRegex)];
-
-    for (let i = 0; i < linkMatches.length && results.length < maxResults; i++) {
-      const match = linkMatches[i];
-      const rawUrl = (match[1] || '').trim();
-      const rawTitle = stripHtml(match[2] || '').trim();
-      if (!rawTitle || !rawUrl) continue;
-
-      const url = normalizeResultUrl(rawUrl);
-      if (!url || !validResultUrl(url)) continue;
-      try {
-        const uri = new URL(url);
-        if (uri.hostname.includes('duckduckgo.com') || uri.hostname.includes('duck.com')) continue;
-      } catch (_) {
-        continue;
-      }
-
-      let snippet = '';
-      if (i < snippetMatches.length) snippet = stripHtml(snippetMatches[i][1] || '').trim();
-      results.push({ title: rawTitle, url, snippet, img_src: null, publishedDate: null });
-    }
-
-    if (results.length === 0) {
-      const liteResponse = await fetchWithTimeout(
-        `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
-        {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
-        },
-        20000
-      );
-      if (liteResponse.ok) {
-        const liteBody = await liteResponse.text();
-        const rowRegex = /<a[^>]*class="result-link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gs;
-        for (const m of [...liteBody.matchAll(rowRegex)]) {
-          if (results.length >= maxResults) break;
-          const rawUrl = (m[1] || '').trim();
-          const rawTitle = stripHtml(m[2] || '').trim();
-          if (!rawTitle || rawTitle.length < 2 || !rawUrl) continue;
-          const url = normalizeResultUrl(rawUrl);
-          if (!url || !validResultUrl(url)) continue;
-          try {
-            const uri = new URL(url);
-            if (uri.hostname.includes('duckduckgo.com') || uri.hostname.includes('duck.com')) continue;
-          } catch (_) {
-            continue;
-          }
-          results.push({ title: rawTitle, url, snippet: '', img_src: null, publishedDate: null });
-        }
-      }
-    }
-    return results;
+    const hits = (data.web && data.web.results) || [];
+    return hits.slice(0, maxResults).map((h) => ({
+      title: h.title || '',
+      url: h.url || '',
+      snippet: h.description || '',
+      img_src: (h.thumbnail && h.thumbnail.src) || null,
+      publishedDate: h.page_age || null,
+    }));
   } catch (_) {
     return [];
   }
 }
 
 async function bingSearch(query, maxResults = 12) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 40000);
-    const response = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&setlang=en`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!response.ok) return [];
-
-    const body = await response.text();
-    const results = [];
-    const itemRegex = /<li class="b_algo"[\s\S]*?<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a><\/h2>([\s\S]*?)<\/li>/gs;
-    for (const m of [...body.matchAll(itemRegex)]) {
-      if (results.length >= maxResults) break;
-      const rawUrl = (m[1] || '').trim();
-      const rawTitle = stripHtml(m[2] || '').trim();
-      if (!rawTitle || !rawUrl) continue;
-      const url = normalizeResultUrl(rawUrl);
-      if (!url || !validResultUrl(url)) continue;
-      const block = m[3] || '';
-      const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
-      const snippet = snippetMatch ? stripHtml(snippetMatch[1]).trim() : '';
-      results.push({ title: rawTitle, url, snippet, img_src: null, publishedDate: null });
-    }
-    return results;
-  } catch (_) {
-    return [];
-  }
+  // Removed: HTML scraping was slow and frequently blocked. Brave API +
+  // Wikipedia (see searchFromWeb) cover this path with a tight time budget.
+  return [];
 }
 
 async function wikipediaSearch(query, maxResults = 8) {
@@ -631,162 +513,30 @@ async function commonsImageSearch(query, maxResults = 10) {
 }
 
 async function searchSearxng(query, category, maxResults) {
-  const categories =
-    category === 'all'
-      ? 'general'
-      : category === 'images' ? 'images'
-      : category === 'videos' ? 'videos'
-      : category === 'news' ? 'news'
-      : 'general';
-
-  // Query every SearXNG instance in parallel with a short timeout; take the
-  // first one that returns results. This is dramatically faster and more
-  // reliable than trying instances one-by-one.
-  const attempts = SEARXNG_URLS.map(async (searxngUrl) => {
-    try {
-      const searchUrl = new URL(searxngUrl);
-      searchUrl.searchParams.set('q', query);
-      searchUrl.searchParams.set('format', 'json');
-      searchUrl.searchParams.set('language', 'en');
-      searchUrl.searchParams.set('pageno', '1');
-      searchUrl.searchParams.set('categories', categories);
-
-      const response = await fetchWithTimeout(
-        searchUrl.toString(),
-        { headers: { 'Accept': 'application/json', 'User-Agent': 'AcronousAI/1.0.0' } },
-        6000
-      );
-      if (!response.ok) return null;
-      const data = await response.json();
-      const rawResults = data.results || [];
-      if (rawResults.length === 0) return null;
-      return {
-        results: rawResults.slice(0, maxResults || 50).map((r) => ({
-          title: r.title || '',
-          url: r.url || '',
-          content: r.content || r.snippet || '',
-          img_src: r.img_src || r.thumbnail_src || null,
-          publishedDate: r.publishedDate || null,
-        })),
-        suggestions: (data.suggestions || []).map((s) => s.toString()).filter(Boolean),
-        infoboxes: (data.infoboxes || []).map((ib) => ({
-          title: ib.title || '',
-          content: ib.content || '',
-          url: ib.url || null,
-          img_src: ib.img_src || null,
-          attributes: (ib.attributes || []).map((a) => ({
-            label: a.label || '',
-            value: a.value || '',
-          })),
-        })),
-        answers: (data.answers || []).map((a) => a.toString()).filter(Boolean),
-        numberOfResults: data.number_of_results || null,
-      };
-    } catch (error) {
-      return null;
-    }
-  });
-
-  const settled = await Promise.allSettled(attempts);
-  for (const s of settled) {
-    if (s.status === 'fulfilled' && s.value) return s.value;
-  }
+  // Removed: fanning out to a dozen SearXNG instances was the single slowest
+  // part of every search. Brave API + Wikipedia (see searchFromWeb) replace it.
   return null;
 }
 
 async function mojeekSearch(query, maxResults = 10) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 7000);
-    const response = await fetch(
-      `https://www.mojeek.com/search?q=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-        signal: controller.signal,
-      }
-    );
-    clearTimeout(timeoutId);
-    if (!response.ok) return [];
-    const body = await response.text();
-    const results = [];
-    const itemRegex = /<a class="title" href="([^"]+)"[^>]*>(.*?)<\/a>([\s\S]*?)<p class="s">([\s\S]*?)<\/p>/gs;
-    for (const m of [...body.matchAll(itemRegex)]) {
-      if (results.length >= maxResults) break;
-      const rawUrl = (m[1] || '').trim();
-      const rawTitle = stripHtml(m[2] || '').trim();
-      if (!rawTitle || !rawUrl) continue;
-      const url = normalizeResultUrl(rawUrl);
-      if (!url || !validResultUrl(url)) continue;
-      const snippet = stripHtml(m[4] || '').trim();
-      results.push({ title: rawTitle, url, snippet, img_src: null, publishedDate: null });
-    }
-    return results;
-  } catch (_) {
-    return [];
-  }
+  // Removed: HTML scraping was slow and frequently blocked. Brave API +
+  // Wikipedia (see searchFromWeb) cover this path with a tight time budget.
+  return [];
 }
 
 async function startpageSearch(query, maxResults = 10) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 7000);
-    const response = await fetch(
-      `https://www.startpage.com/sp/search?query=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-        signal: controller.signal,
-      }
-    );
-    clearTimeout(timeoutId);
-    if (!response.ok) return [];
-    const body = await response.text();
-    const results = [];
-    const itemRegex = /<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>([\s\S]*?)<p[^>]*class="[^"]*description[^"]*"[^>]*>([\s\S]*?)<\/p>/gs;
-    for (const m of [...body.matchAll(itemRegex)]) {
-      if (results.length >= maxResults) break;
-      const rawUrl = (m[1] || '').trim();
-      const rawTitle = stripHtml(m[2] || '').trim();
-      if (!rawTitle || !rawUrl) continue;
-      const url = normalizeResultUrl(rawUrl);
-      if (!url || !validResultUrl(url)) continue;
-      const snippet = stripHtml(m[4] || '').trim();
-      results.push({ title: rawTitle, url, snippet, img_src: null, publishedDate: null });
-    }
-    return results;
-  } catch (_) {
-    return [];
-  }
+  // Removed: HTML scraping was slow and frequently blocked. Brave API +
+  // Wikipedia (see searchFromWeb) cover this path with a tight time budget.
+  return [];
 }
 
-// Runs several independent search engines in parallel and merges their results
-// so the browser can reach the whole internet quickly and reliably.
-// Fast-first: tight per-engine caps so a single slow engine (often SearXNG or
-// DuckDuckGo HTML scraping) never stalls the whole answer.
-async function searchFromWeb(query, maxResults = 10) {
-  const category = 'all';
-
-  const [searxngResult, ddgHtml, bing, wiki, ddgApi, mojeek, startpage] = await Promise.all([
-    withTimeout(searchSearxng(query, category, maxResults), 4000).catch(() => null),
-    withTimeout(duckDuckGoHtmlSearch(query, maxResults), 3500).catch(() => []),
-    withTimeout(bingSearch(query, maxResults), 3500).catch(() => []),
+// Fast general search: Brave API (when keyed) + Wikipedia in parallel with a
+// tight total budget (~2.5s). No DuckDuckGo / SearXNG / HTML scraping.
+async function searchFromWeb(query, maxResults = 10, env = null) {
+  const [brave, wiki] = await Promise.all([
+    withTimeout(braveSearch(env, query, maxResults), 2800).catch(() => []),
     withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
-    withTimeout(duckDuckGoApiSearch(query, maxResults), 2500).catch(() => []),
-    withTimeout(mojeekSearch(query, maxResults), 3000).catch(() => []),
-    withTimeout(startpageSearch(query, maxResults), 3000).catch(() => []),
   ]);
-
-  const merged = [];
-  if (searxngResult && Array.isArray(searxngResult.results)) {
-    merged.push(...searxngResult.results);
-  }
   const toMerged = (list) =>
     (list || []).map((r) => ({
       title: r.title || '',
@@ -795,7 +545,7 @@ async function searchFromWeb(query, maxResults = 10) {
       img_src: r.img_src || null,
       publishedDate: r.publishedDate || null,
     }));
-  merged.push(...toMerged(ddgHtml), ...toMerged(bing), ...toMerged(wiki), ...toMerged(ddgApi), ...toMerged(mojeek), ...toMerged(startpage));
+  const merged = [...toMerged(brave), ...toMerged(wiki)];
 
   return cleanSearchResults(dedupeByUrl(merged)).slice(0, maxResults);
 }
@@ -841,22 +591,24 @@ async function planResearch(env, query) {
 }
 
 async function runResearch(env, query) {
-  // Plan + main search run together: planning is LLM-bound and used to block
-  // all searching. Cap planning at 6s, then fall back to heuristics instantly.
+  // Fast research: ONE quick search round (no slow multi-engine fan-out),
+  // then straight to synthesis. Planning still runs but never blocks search.
   const [subQueries, mainResults] = await Promise.all([
-    withTimeout(planResearch(env, query), 6000).catch(() => fallbackResearchQueries(query)),
-    searchFromWeb(query, 12),
+    withTimeout(planResearch(env, query), 5000).catch(() => fallbackResearchQueries(query)),
+    withTimeout(searchFromWeb(query, 12, env), 3000).catch(() => []),
   ]);
 
-  const results = await runLimitedConcurrent(
-    subQueries.slice(0, 4),
-    4,
-    async (sq) => {
-      const found = await searchFromWeb(sq, 6);
-      return found || [];
-    }
+  // One extra query max (the most distinct sub-query), tightly budgeted —
+  // depth without the old 4-way serial fan-out that added 10s+.
+  const extraQueries = (subQueries || [])
+    .filter((sq) => sq && sq.toLowerCase() !== query.toLowerCase())
+    .slice(0, 1);
+  const extraResults = await Promise.all(
+    extraQueries.map((sq) =>
+      withTimeout(searchFromWeb(sq, 6, env), 3000).catch(() => [])
+    )
   );
-  const allResults = dedupeByUrl([...mainResults, ...results.flat()]);
+  const allResults = dedupeByUrl([...mainResults, ...extraResults.flat()]);
   const topResults = allResults.slice(0, 20);
 
   let research = {
@@ -874,11 +626,11 @@ async function runResearch(env, query) {
   }
 
   // Deep research: fetch the actual page content of the top sources so the
-  // report is built from real facts, not just snippets. Capped at 5 pages so
-  // research shows results fast instead of crawling half the web first.
+  // report is built from real facts, not just snippets. Capped at 3 pages /
+  // 6s each so research stays fast instead of crawling half the web first.
   const withContent = await runLimitedConcurrent(
-    topResults.slice(0, 5),
-    4,
+    topResults.slice(0, 3),
+    3,
     async (r) => {
       const text = await extractPageContent(r.url, 1200);
       return text ? { ...r, page_text: text } : r;
@@ -1101,13 +853,15 @@ async function handleChat(request, env) {
       }
     }
 
-    // Chat / web search
+    // Chat / web search — search has a tight 2.5s budget so it can never
+    // stall the answer; the LLM responds from its knowledge when search is
+    // slow or empty.
     let searchResults = [];
     let searchSuggestions = [];
     const wantsWeb = mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false);
     if (wantsWeb) {
-      const found = await searchFromWeb(userMessage, 8);
-      searchResults = found;
+      const found = await withTimeout(searchFromWeb(userMessage, 8, env), 2500).catch(() => []);
+      searchResults = found || [];
       searchSuggestions = [];
     }
 
@@ -1218,10 +972,11 @@ async function handleAgentBuild(request, env) {
     const language = body.language;
 
     // 1. Search the web for up-to-date context before writing any code.
+    // Tight budget so a slow search never stalls the build.
     let sources = [];
     let extraContext = '';
     try {
-      const searchResults = await searchFromWeb(description, 6);
+      const searchResults = await withTimeout(searchFromWeb(description, 6, env), 2500).catch(() => []);
       sources = cleanSearchResults(searchResults).slice(0, 6).map((r) => ({
         title: r.title,
         url: r.url,
@@ -1261,7 +1016,54 @@ async function handleAgentBuild(request, env) {
   }
 }
 
-async function handleSearch(request, ctx) {
+// LLM-only answer over caller-provided sources. No backend search runs here,
+// so this is the fastest grounded answer path: the app already fetched
+// /search results and just needs the AI Overview written over them.
+async function handleAnswer(request, env) {
+  try {
+    const body = await request.json();
+    const query = (body.query || body.message || '').trim();
+    if (!query) return respondError('Query is required', 400);
+    const rawSources = Array.isArray(body.sources) ? body.sources : [];
+    const sources = rawSources.slice(0, 10).map((r) => ({
+      title: (r.title || '').toString(),
+      url: (r.url || '').toString(),
+      content: ((r.content || r.snippet || '')).toString().slice(0, 500),
+    })).filter((r) => r.title && r.url);
+
+    const context = sources.length > 0
+      ? sources.map((r) => `- ${r.title}\n  URL: ${r.url}\n  ${r.content}`).join('\n\n')
+      : '';
+    const systemContent =
+      `${AGENT_IDENTITY}\n\nYou are the Navigwiz AI Overview. Answer the user query FIRST, directly and completely. ` +
+      `Rules: (1) Always give the appropriate, latest and correct answer — use the search results plus your knowledge and today's date (${nowIso()}). ` +
+      `(2) If the question needs current info (prices, scores, news, versions, dates), prefer the freshest search result. ` +
+      `(3) Structure: start with a direct answer in 1-3 sentences, then key details as short bullets when helpful. ` +
+      `(4) Cite sources inline by domain when you use them, e.g. (example.com). ` +
+      `(5) Never say you lack browsing or that knowledge is outdated. Be concise but complete.`;
+
+    const content = await callLLM({
+      env,
+      messages: [
+        { role: 'system', content: systemContent },
+        ...(context
+          ? [{ role: 'user', content: `User query: ${query}\n\nCurrent web search results:\n${context}\n\nAnswer based on the results and cite sources by URL.` }]
+          : [{ role: 'user', content: query }]),
+      ],
+      maxTokens: 2048,
+      temperature: 0.7,
+      timeoutMs: 45000,
+      task: 'chat',
+    });
+    if (!content || !content.trim()) throw new Error('empty answer');
+    return respondJson({ response: content, type: 'answer', mode: 'web_search' });
+  } catch (error) {
+    console.error('Answer handler error:', error.message);
+    return respondError('I could not complete that request. Please try again.', 502);
+  }
+}
+
+async function handleSearch(request, env, ctx) {
   const url = new URL(request.url);
   const query = url.searchParams.get('q');
   if (!query) return respondError('Missing query parameter', 400);
@@ -1277,32 +1079,13 @@ async function handleSearch(request, ctx) {
     if (cached) return cached;
   } catch (_) {}
 
-  // Fire every search engine in parallel so results come back fast and cover
-  // the whole internet, not just a handful of sites. Tight caps: the first
-  // fast engines win; slow scrapers can't stall the response.
-  const [searxngResult, ddgHtml, bing, wiki, ddgApi, mojeek, startpage] = await Promise.all([
-    withTimeout(searchSearxng(query, category, 50), 4000).catch(() => null),
-    withTimeout(duckDuckGoHtmlSearch(query, 20), 3500).catch(() => []),
-    withTimeout(bingSearch(query, 15), 3500).catch(() => []),
-    withTimeout(wikipediaSearch(query, 8), 2500).catch(() => []),
-    withTimeout(duckDuckGoApiSearch(query, 10), 2500).catch(() => []),
-    withTimeout(mojeekSearch(query, 15), 3000).catch(() => []),
-    withTimeout(startpageSearch(query, 15), 3000).catch(() => []),
+  // Fast path only: Brave API (when keyed) + Wikipedia, ~2.5s budget.
+  // No DuckDuckGo / SearXNG / HTML scraping.
+  const [brave, wiki] = await Promise.all([
+    withTimeout(braveSearch(env, query, 50), 2800).catch(() => []),
+    withTimeout(wikipediaSearch(query, category === 'images' ? 4 : 8), 2500).catch(() => []),
   ]);
 
-  let merged = [];
-  let suggestions = [];
-  let infoboxes = [];
-  let answers = [];
-  let numberOfResults = null;
-
-  if (searxngResult && Array.isArray(searxngResult.results)) {
-    merged.push(...searxngResult.results);
-    suggestions = searxngResult.suggestions || [];
-    infoboxes = searxngResult.infoboxes || [];
-    answers = searxngResult.answers || [];
-    numberOfResults = searxngResult.numberOfResults || null;
-  }
   const toMerged = (list) =>
     (list || []).map((r) => ({
       title: r.title || '',
@@ -1311,21 +1094,29 @@ async function handleSearch(request, ctx) {
       img_src: r.img_src || null,
       publishedDate: r.publishedDate || null,
     }));
-  merged.push(...toMerged(ddgHtml), ...toMerged(bing), ...toMerged(wiki), ...toMerged(ddgApi), ...toMerged(mojeek), ...toMerged(startpage));
+  let merged = [...toMerged(brave), ...toMerged(wiki)];
 
   if (category === 'images') {
-    const commonsResults = await commonsImageSearch(query, 10);
+    const commonsResults = await withTimeout(commonsImageSearch(query, 10), 2500).catch(() => []);
     merged.push(...toMerged(commonsResults));
   }
 
   merged = cleanSearchResults(dedupeByUrl(merged)).slice(0, 50);
 
+  // Lightweight suggestions derived from result titles (no extra network).
+  const suggestions = [];
+  for (const r of merged) {
+    if (suggestions.length >= 3) break;
+    const t = (r.title || '').trim();
+    if (t && t.toLowerCase() !== query.trim().toLowerCase()) suggestions.push(t);
+  }
+
   const response = respondJson({
     results: merged,
     suggestions,
-    infoboxes,
-    answers,
-    number_of_results: numberOfResults,
+    infoboxes: [],
+    answers: [],
+    number_of_results: merged.length,
   });
   response.headers.set('Cache-Control', 'public, max-age=300');
 
@@ -1481,7 +1272,12 @@ async function handleRequest(request, env, ctx) {
 
     case '/search':
       if (request.method !== 'GET') return respondError('Method not allowed', 405);
-      return handleSearch(request, ctx);
+      return handleSearch(request, env, ctx);
+
+    case '/v1/answer':
+    case '/api/answer':
+      if (request.method !== 'POST') return respondError('Method not allowed', 405);
+      return handleAnswer(request, env);
 
     case '/image-proxy':
       if (request.method !== 'GET') return respondError('Method not allowed', 405);
