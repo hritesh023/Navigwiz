@@ -1,11 +1,14 @@
 // ------------------------------------------------------------------ Search
-// Fast search stack (no DuckDuckGo / SearXNG scraping — both were slow and
-// frequently blocked, adding 3-8s to every answer):
-//   1. Brave Search Data API (official fast JSON API, <1s) when BRAVE_API_KEY
-//      is configured on the worker.
-//   2. Wikipedia API (fast keyless JSON API) as an always-on fallback.
-// General web questions are answered from these plus the LLM's knowledge,
-// so search never stalls the response.
+// 100% FREE keyless search stack (no paid APIs, no keys, no HTML scraping):
+//   Wikipedia      general knowledge      (fast JSON API)
+//   StackExchange  programming / how-to   (fast JSON API)
+//   HN Algolia     tech / startup pulse   (fast JSON API)
+//   GDELT          world news / current   (fast JSON API)
+//   arXiv          research papers        (fast Atom API)
+//   OpenLibrary    books                  (fast JSON API)
+//   Commons        images                 (fast JSON API, images only)
+// General web answers come from these plus the LLM's knowledge, with a tight
+// total budget (~2.5s) so search never stalls the response.
 const ALLOWED_ORIGINS = '*';
 const DEFAULT_ORACLE_URL = 'https://oracle.acronous.com';
 const DEFAULT_ORACLE_MODEL = 'qwen2.5:14b';
@@ -416,31 +419,118 @@ function cleanSearchResults(results) {
 }
 
 // ------------------------------------------------------------------ Search
-// Brave Search Data API: official fast JSON API (<1s). Used when
-// BRAVE_API_KEY is configured; skipped silently otherwise.
-async function braveSearch(env, query, maxResults = 10) {
+// StackExchange: programming / how-to Q&A. Keyless JSON API.
+async function stackExchangeSearch(query, maxResults = 5) {
   try {
-    const apiKey = (env && env.BRAVE_API_KEY) || '';
-    if (!apiKey) return [];
     const response = await fetchWithTimeout(
-      `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(maxResults, 20)}&text_decorations=false&search_lang=en`,
-      {
-        headers: {
-          Accept: 'application/json',
-          'X-Subscription-Token': apiKey,
-        },
-      },
-      2500
+      `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${encodeURIComponent(query)}&site=stackoverflow&pagesize=${Math.min(maxResults, 10)}`,
+      { headers: { Accept: 'application/json' } },
+      2000
     );
     if (!response.ok) return [];
     const data = await response.json();
-    const hits = (data.web && data.web.results) || [];
-    return hits.slice(0, maxResults).map((h) => ({
+    return ((data && data.items) || []).slice(0, maxResults).map((h) => ({
       title: h.title || '',
-      url: h.url || '',
-      snippet: h.description || '',
-      img_src: (h.thumbnail && h.thumbnail.src) || null,
-      publishedDate: h.page_age || null,
+      url: h.link || '',
+      snippet: `${h.is_answered ? 'Answered' : 'Question'} • score ${h.score || 0} • ${((h.tags || []).slice(0, 4)).join(', ')}`,
+      img_src: null,
+      publishedDate: null,
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+// HackerNews via Algolia: tech / startup pulse. Keyless JSON API.
+async function hnSearch(query, maxResults = 5) {
+  try {
+    const response = await fetchWithTimeout(
+      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=${Math.min(maxResults, 10)}`,
+      { headers: { Accept: 'application/json' } },
+      2000
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return ((data && data.hits) || []).slice(0, maxResults).map((h) => ({
+      title: h.title || '',
+      url: h.url || `https://news.ycombinator.com/item?id=${h.objectID || ''}`,
+      snippet: `${h.points || 0} points • ${h.num_comments || 0} comments • Hacker News`,
+      img_src: null,
+      publishedDate: h.created_at || null,
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+// GDELT DOC API: world news / current events. Keyless JSON API.
+async function gdeltSearch(query, maxResults = 6) {
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&mode=artlist&maxrecords=${Math.min(maxResults, 10)}&format=json`,
+      { headers: { Accept: 'application/json' } },
+      2200
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return ((data && data.articles) || []).slice(0, maxResults).map((a) => ({
+      title: a.title || '',
+      url: a.url || '',
+      snippet: `${a.sourceCommonName || a.domain || 'News'} • ${a.seendate || ''}`,
+      img_src: a.socialimage || null,
+      publishedDate: a.seendate || null,
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+// arXiv: research papers. Keyless Atom API.
+async function arxivSearch(query, maxResults = 3) {
+  try {
+    const response = await fetchWithTimeout(
+      `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=${Math.min(maxResults, 5)}&sortBy=relevance&sortOrder=descending`,
+      { headers: { Accept: 'application/atom+xml' } },
+      2200
+    );
+    if (!response.ok) return [];
+    const xml = await response.text();
+    const entries = xml.split('<entry>').slice(1);
+    const out = [];
+    for (const e of entries) {
+      if (out.length >= maxResults) break;
+      const pick = (tag) => {
+        const m = e.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+        return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+      };
+      const title = pick('title');
+      const id = pick('id');
+      if (!title || !id) continue;
+      const summary = pick('summary').slice(0, 300);
+      out.push({ title, url: id, snippet: summary || 'arXiv paper', img_src: null, publishedDate: pick('published') || null });
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+// OpenLibrary: books. Keyless JSON API.
+async function openLibrarySearch(query, maxResults = 3) {
+  try {
+    const response = await fetchWithTimeout(
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=${Math.min(maxResults, 5)}&fields=key,title,author_name,first_publish_year`,
+      { headers: { Accept: 'application/json' } },
+      2000
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return ((data && data.docs) || []).slice(0, maxResults).map((d) => ({
+      title: d.title || '',
+      url: d.key ? `https://openlibrary.org${d.key}` : '',
+      snippet: `${((d.author_name || []).slice(0, 3)).join(', ') || 'Unknown author'}${d.first_publish_year ? ` • ${d.first_publish_year}` : ''}`,
+      img_src: null,
+      publishedDate: null,
     }));
   } catch (_) {
     return [];
@@ -530,12 +620,36 @@ async function startpageSearch(query, maxResults = 10) {
   return [];
 }
 
-// Fast general search: Brave API (when keyed) + Wikipedia in parallel with a
-// tight total budget (~2.5s). No DuckDuckGo / SearXNG / HTML scraping.
-async function searchFromWeb(query, maxResults = 10, env = null) {
-  const [brave, wiki] = await Promise.all([
-    withTimeout(braveSearch(env, query, maxResults), 2800).catch(() => []),
+// Result ordering by query intent: fresh queries (news/latest/prices) lead
+// with GDELT+HN, code queries lead with StackExchange, everything else leads
+// with Wikipedia. All sources stay in the mix regardless.
+function wantsFreshResults(query) {
+  return /(latest|newest|news|today|this week|current|breaking|2026|price of|score|who won|upcoming|worth it|best .* under|compare| vs\.? )/i.test(query || '');
+}
+function wantsCodeResults(query) {
+  return /(python|javascript|typescript|flutter|dart|java\b|rust|\bgo\b|code|error|exception|function|how to|fix|debug|\bapi\b|regex|sql|install)/i.test(query || '');
+}
+function orderMerged(parts, query) {
+  if (wantsFreshResults(query)) {
+    return [...parts.gdelt, ...parts.hn, ...parts.wiki, ...parts.se, ...parts.arxiv, ...parts.ol];
+  }
+  if (wantsCodeResults(query)) {
+    return [...parts.se, ...parts.hn, ...parts.wiki, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
+  }
+  return [...parts.wiki, ...parts.se, ...parts.hn, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
+}
+
+// Fast general search: all free keyless JSON APIs in parallel with a tight
+// total budget (~2.5s). No paid APIs, no keys, no DuckDuckGo / SearXNG /
+// HTML scraping.
+async function searchFromWeb(query, maxResults = 10) {
+  const [wiki, se, hn, gdelt, arxiv, ol] = await Promise.all([
     withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
+    withTimeout(stackExchangeSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
+    withTimeout(hnSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
+    withTimeout(gdeltSearch(query, Math.min(maxResults, 6)), 2800).catch(() => []),
+    withTimeout(arxivSearch(query, 3), 2800).catch(() => []),
+    withTimeout(openLibrarySearch(query, 3), 2500).catch(() => []),
   ]);
   const toMerged = (list) =>
     (list || []).map((r) => ({
@@ -545,7 +659,15 @@ async function searchFromWeb(query, maxResults = 10, env = null) {
       img_src: r.img_src || null,
       publishedDate: r.publishedDate || null,
     }));
-  const merged = [...toMerged(brave), ...toMerged(wiki)];
+  const parts = {
+    wiki: toMerged(wiki),
+    se: toMerged(se),
+    hn: toMerged(hn),
+    gdelt: toMerged(gdelt),
+    arxiv: toMerged(arxiv),
+    ol: toMerged(ol),
+  };
+  const merged = orderMerged(parts, query);
 
   return cleanSearchResults(dedupeByUrl(merged)).slice(0, maxResults);
 }
@@ -1079,11 +1201,15 @@ async function handleSearch(request, env, ctx) {
     if (cached) return cached;
   } catch (_) {}
 
-  // Fast path only: Brave API (when keyed) + Wikipedia, ~2.5s budget.
-  // No DuckDuckGo / SearXNG / HTML scraping.
-  const [brave, wiki] = await Promise.all([
-    withTimeout(braveSearch(env, query, 50), 2800).catch(() => []),
+  // Fast path only: free keyless JSON APIs in parallel, ~2.5s budget.
+  // No paid APIs, no keys, no DuckDuckGo / SearXNG / HTML scraping.
+  const [wiki, se, hn, gdelt, arxiv, ol] = await Promise.all([
     withTimeout(wikipediaSearch(query, category === 'images' ? 4 : 8), 2500).catch(() => []),
+    withTimeout(stackExchangeSearch(query, 8), 2500).catch(() => []),
+    withTimeout(hnSearch(query, 8), 2500).catch(() => []),
+    withTimeout(gdeltSearch(query, 10), 2800).catch(() => []),
+    withTimeout(arxivSearch(query, 5), 2800).catch(() => []),
+    withTimeout(openLibrarySearch(query, 5), 2500).catch(() => []),
   ]);
 
   const toMerged = (list) =>
@@ -1094,7 +1220,17 @@ async function handleSearch(request, env, ctx) {
       img_src: r.img_src || null,
       publishedDate: r.publishedDate || null,
     }));
-  let merged = [...toMerged(brave), ...toMerged(wiki)];
+  let merged = orderMerged(
+    {
+      wiki: toMerged(wiki),
+      se: toMerged(se),
+      hn: toMerged(hn),
+      gdelt: toMerged(gdelt),
+      arxiv: toMerged(arxiv),
+      ol: toMerged(ol),
+    },
+    query
+  );
 
   if (category === 'images') {
     const commonsResults = await withTimeout(commonsImageSearch(query, 10), 2500).catch(() => []);
