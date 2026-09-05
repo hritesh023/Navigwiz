@@ -1,12 +1,13 @@
 // ------------------------------------------------------------------ Search
-// 100% FREE keyless search stack (no paid APIs, no keys, no HTML scraping):
-//   Wikipedia      general knowledge      (fast JSON API)
-//   StackExchange  programming / how-to   (fast JSON API)
-//   HN Algolia     tech / startup pulse   (fast JSON API)
-//   GDELT          world news / current   (fast JSON API)
+// 100% FREE keyless search stack (no paid APIs, no keys, no rate-limited
+// sources, no HTML scraping):
+//   Wikipedia      general knowledge      (fast JSON API, no hard quota)
+//   HN Algolia     tech / code / startup  (fast JSON API, no hard quota)
+//   GDELT          news / current / how-to (fast JSON API, no hard quota)
 //   arXiv          research papers        (fast Atom API)
 //   OpenLibrary    books                  (fast JSON API)
 //   Commons        images                 (fast JSON API, images only)
+// (StackExchange removed: hard 300 req/day keyless quota would throttle.)
 // General web answers come from these plus the LLM's knowledge, with a tight
 // total budget (~2.5s) so search never stalls the response.
 const ALLOWED_ORIGINS = '*';
@@ -419,26 +420,10 @@ function cleanSearchResults(results) {
 }
 
 // ------------------------------------------------------------------ Search
-// StackExchange: programming / how-to Q&A. Keyless JSON API.
+// StackExchange: REMOVED — keyless quota is a hard 300 req/day per IP, so it
+// would throttle in production. Code queries are covered by HN + GDELT.
 async function stackExchangeSearch(query, maxResults = 5) {
-  try {
-    const response = await fetchWithTimeout(
-      `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${encodeURIComponent(query)}&site=stackoverflow&pagesize=${Math.min(maxResults, 10)}`,
-      { headers: { Accept: 'application/json' } },
-      2000
-    );
-    if (!response.ok) return [];
-    const data = await response.json();
-    return ((data && data.items) || []).slice(0, maxResults).map((h) => ({
-      title: h.title || '',
-      url: h.link || '',
-      snippet: `${h.is_answered ? 'Answered' : 'Question'} • score ${h.score || 0} • ${((h.tags || []).slice(0, 4)).join(', ')}`,
-      img_src: null,
-      publishedDate: null,
-    }));
-  } catch (_) {
-    return [];
-  }
+  return [];
 }
 
 // HackerNews via Algolia: tech / startup pulse. Keyless JSON API.
@@ -631,22 +616,21 @@ function wantsCodeResults(query) {
 }
 function orderMerged(parts, query) {
   if (wantsFreshResults(query)) {
-    return [...parts.gdelt, ...parts.hn, ...parts.wiki, ...parts.se, ...parts.arxiv, ...parts.ol];
+    return [...parts.gdelt, ...parts.hn, ...parts.wiki, ...parts.arxiv, ...parts.ol];
   }
   if (wantsCodeResults(query)) {
-    return [...parts.se, ...parts.hn, ...parts.wiki, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
+    return [...parts.hn, ...parts.gdelt, ...parts.wiki, ...parts.arxiv, ...parts.ol];
   }
-  return [...parts.wiki, ...parts.se, ...parts.hn, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
+  return [...parts.wiki, ...parts.hn, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
 }
 
 // Fast general search: all free keyless JSON APIs in parallel with a tight
-// total budget (~2.5s). No paid APIs, no keys, no DuckDuckGo / SearXNG /
-// HTML scraping.
+// total budget (~2.5s). No paid APIs, no keys, no rate-limited sources,
+// no DuckDuckGo / SearXNG / HTML scraping.
 async function searchFromWeb(query, maxResults = 10) {
-  const [wiki, se, hn, gdelt, arxiv, ol] = await Promise.all([
+  const [wiki, hn, gdelt, arxiv, ol] = await Promise.all([
     withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
-    withTimeout(stackExchangeSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
-    withTimeout(hnSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
+    withTimeout(hnSearch(query, Math.min(maxResults, 6)), 2500).catch(() => []),
     withTimeout(gdeltSearch(query, Math.min(maxResults, 6)), 2800).catch(() => []),
     withTimeout(arxivSearch(query, 3), 2800).catch(() => []),
     withTimeout(openLibrarySearch(query, 3), 2500).catch(() => []),
@@ -661,7 +645,6 @@ async function searchFromWeb(query, maxResults = 10) {
     }));
   const parts = {
     wiki: toMerged(wiki),
-    se: toMerged(se),
     hn: toMerged(hn),
     gdelt: toMerged(gdelt),
     arxiv: toMerged(arxiv),
@@ -1202,10 +1185,9 @@ async function handleSearch(request, env, ctx) {
   } catch (_) {}
 
   // Fast path only: free keyless JSON APIs in parallel, ~2.5s budget.
-  // No paid APIs, no keys, no DuckDuckGo / SearXNG / HTML scraping.
-  const [wiki, se, hn, gdelt, arxiv, ol] = await Promise.all([
+  // No paid APIs, no keys, no rate-limited sources, no HTML scraping.
+  const [wiki, hn, gdelt, arxiv, ol] = await Promise.all([
     withTimeout(wikipediaSearch(query, category === 'images' ? 4 : 8), 2500).catch(() => []),
-    withTimeout(stackExchangeSearch(query, 8), 2500).catch(() => []),
     withTimeout(hnSearch(query, 8), 2500).catch(() => []),
     withTimeout(gdeltSearch(query, 10), 2800).catch(() => []),
     withTimeout(arxivSearch(query, 5), 2800).catch(() => []),
@@ -1223,7 +1205,6 @@ async function handleSearch(request, env, ctx) {
   let merged = orderMerged(
     {
       wiki: toMerged(wiki),
-      se: toMerged(se),
       hn: toMerged(hn),
       gdelt: toMerged(gdelt),
       arxiv: toMerged(arxiv),
