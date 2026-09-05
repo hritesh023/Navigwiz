@@ -11,9 +11,11 @@ import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/workspace_provider.dart';
 import '../providers/memory_provider.dart';
+import '../services/input_actions.dart';
 import '../widgets/address_bar.dart';
 import '../widgets/browser_tab_bar.dart';
 import '../widgets/customization_panel.dart';
+import '../widgets/nav_search_bar.dart';
 import '../widgets/ai_assistant_side_panel.dart';
 import '../widgets/saturn_logo.dart';
 import '../widgets/acronous_logo.dart';
@@ -42,6 +44,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   bool _showWorkspacePanel = false;
   WebViewController? _webViewController;
   final TextEditingController _homeSearchController = TextEditingController();
+  List<PickedAttachment> _homeAttachments = [];
 
   static const String _adBlockScript = r'''
 (() => {
@@ -270,6 +273,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
                         bottom: 0,
                         width: aiWidth,
                         child: AiAssistantSidePanel(
+                          currentUrl:
+                              browserService.activeTab?.url ?? '',
+                          currentTitle:
+                              browserService.activeTab?.title ?? '',
                           onClose: () =>
                               setState(() => _showAiAssistantPanel = false),
                           onExpand: () async {
@@ -395,68 +402,17 @@ class _BrowserScreenState extends State<BrowserScreen> {
               },
             ),
             const SizedBox(height: 16),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720),
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .surface
-                      .withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color:
-                        Theme.of(context).dividerColor.withValues(alpha: 0.3),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .shadow
-                          .withValues(alpha: 0.18),
-                      blurRadius: 22,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.search,
-                        color:
-                            Theme.of(context).colorScheme.onSurfaceVariant),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextField(
-                        controller: _homeSearchController,
-                        autofocus: true,
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: _submitHomeSearch,
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: 'What do you want to do?',
-                          hintStyle: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
-                          ),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Search',
-                      onPressed: () =>
-                          _submitHomeSearch(_homeSearchController.text),
-                      icon: const Icon(Icons.arrow_forward),
-                    ),
-                  ],
-                ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: NavSearchBar(
+                controller: _homeSearchController,
+                hintText: 'What do you want to do?...',
+                autofocus: true,
+                onSubmitted: _submitHomeSearch,
+                onSubmitPressed: () =>
+                    _submitHomeSearch(_homeSearchController.text),
+                onAttachmentsChanged: (files) =>
+                    _homeAttachments = files,
               ),
             ),
             const SizedBox(height: 20),
@@ -605,6 +561,19 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   void _submitHomeSearch(String value) {
     final query = value.trim();
+    if (query.isEmpty && _homeAttachments.isEmpty) return;
+    if (_homeAttachments.isNotEmpty) {
+      final names =
+          _homeAttachments.map((a) => a.name).join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Searching with ${ _homeAttachments.length} attachment(s): $names. Open AI Chat or Workspace to analyze files deeply.',
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
     if (query.isEmpty) return;
     Provider.of<BrowserService>(context, listen: false).navigateToUrl(query);
   }

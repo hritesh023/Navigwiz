@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/research_provider.dart';
 import '../services/browser_service.dart';
+import '../services/input_actions.dart';
+import '../widgets/nav_search_bar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ResearchScreen extends StatefulWidget {
@@ -13,6 +15,7 @@ class ResearchScreen extends StatefulWidget {
 
 class _ResearchScreenState extends State<ResearchScreen> {
   final TextEditingController _controller = TextEditingController();
+  List<PickedAttachment> _attachments = [];
 
   @override
   void dispose() {
@@ -21,8 +24,16 @@ class _ResearchScreenState extends State<ResearchScreen> {
   }
 
   Future<void> _startResearch(String objective) async {
+    var query = objective.trim();
+    if (query.isEmpty && _attachments.isEmpty) return;
+    if (_attachments.isNotEmpty) {
+      final names = _attachments.map((a) => a.name).join(', ');
+      query = query.isEmpty
+          ? 'Research these attachments: $names'
+          : '$query\n\n[Attachments: $names]';
+    }
     final provider = Provider.of<ResearchProvider>(context, listen: false);
-    await provider.startResearch(objective);
+    await provider.startResearch(query);
   }
 
   void _openUrl(String url) {
@@ -118,61 +129,12 @@ class _ResearchScreenState extends State<ResearchScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        Container(
-          height: 54,
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: primary.withValues(alpha: 0.3)),
-            boxShadow: [
-              BoxShadow(
-                color: primary.withValues(alpha: 0.08),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              const SizedBox(width: 16),
-              Icon(Icons.travel_explore, color: primary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: _controller,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (v) {
-                    if (v.trim().isNotEmpty) _startResearch(v.trim());
-                  },
-                  style: TextStyle(
-                      fontSize: 15, color: theme.colorScheme.onSurface),
-                  decoration: InputDecoration(
-                    hintText: 'What should I research?',
-                    hintStyle: TextStyle(
-                        fontSize: 14,
-                        color: theme.colorScheme.onSurfaceVariant),
-                    border: InputBorder.none,
-                  ),
-                ),
-              ),
-              Container(
-                margin: const EdgeInsets.all(6),
-                child: FilledButton(
-                  onPressed: () {
-                    if (_controller.text.trim().isNotEmpty) {
-                      _startResearch(_controller.text.trim());
-                    }
-                  },
-                  style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                  ),
-                  child: const Icon(Icons.arrow_forward, size: 20),
-                ),
-              ),
-            ],
-          ),
+        NavSearchBar(
+          controller: _controller,
+          hintText: 'What should I research?...',
+          onSubmitted: _startResearch,
+          onSubmitPressed: () => _startResearch(_controller.text),
+          onAttachmentsChanged: (files) => _attachments = files,
         ),
         const SizedBox(height: 20),
         Text('Try one of these',

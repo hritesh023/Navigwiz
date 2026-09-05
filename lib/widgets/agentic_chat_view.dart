@@ -7,17 +7,20 @@ import '../providers/project_provider.dart';
 import '../screens/project_screen.dart';
 import '../services/ai_service.dart';
 import '../services/browser_service.dart';
+import '../services/input_actions.dart';
 import '../utils/project_confirm.dart';
 import 'markdown_body.dart';
 
 class AgenticChatView extends StatefulWidget {
   final EdgeInsets padding;
   final bool autoFocus;
+  final String? pageContext;
 
   const AgenticChatView({
     super.key,
     this.padding = EdgeInsets.zero,
     this.autoFocus = false,
+    this.pageContext,
   });
 
   @override
@@ -28,9 +31,11 @@ class _AgenticChatViewState extends State<AgenticChatView> {
   final List<AgentChatMessage> _messages = [];
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final List<PickedAttachment> _attachments = [];
   String _mode = 'auto';
   String? _sessionId;
   bool _isBusy = false;
+  bool _listening = false;
 
   static const Map<String, String> _modeLabels = {
     'auto': 'Chat',
@@ -42,6 +47,7 @@ class _AgenticChatViewState extends State<AgenticChatView> {
 
   @override
   void dispose() {
+    if (_listening) InputActions.stopVoice();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -59,23 +65,88 @@ class _AgenticChatViewState extends State<AgenticChatView> {
     });
   }
 
+  Future<void> _toggleVoice() async {
+    if (_listening) {
+      InputActions.stopVoice(onState: (v) {
+        if (mounted) setState(() => _listening = v);
+      });
+      return;
+    }
+    await InputActions.toggleVoice(
+      context,
+      _controller,
+      onState: (v) {
+        if (mounted) setState(() => _listening = v);
+      },
+    );
+  }
+
+  void _openAttachSheet() {
+    InputActions.showAttachSheet(
+      context,
+      onPicked: (files) {
+        setState(() => _attachments.addAll(files));
+        if (_controller.text.trim().isEmpty) {
+          _controller.text = files.length == 1
+              ? 'What is in ${files.first.name}? Explain it to me.'
+              : 'I attached ${files.length} files. Summarize them for me.';
+        }
+      },
+    );
+  }
+
+  void _openCameraSheet() {
+    InputActions.showCameraSheet(
+      context,
+      onImage: (path) {
+        final name = path.split('/').last.split('\\').last;
+        setState(() => _attachments.add(
+              PickedAttachment(
+                  name: name.isEmpty ? path : name, path: path),
+            ));
+        if (_controller.text.trim().isEmpty) {
+          _controller.text = 'What do you see in this picture?';
+        }
+      },
+    );
+  }
+
   Future<void> _send([String? presetText]) async {
-    final text = (presetText ?? _controller.text).trim();
-    if (text.isEmpty || _isBusy) return;
+    var text = (presetText ?? _controller.text).trim();
+    if ((text.isEmpty && _attachments.isEmpty) || _isBusy) return;
+    // Attachments travel with the question so the AI can reference/convert
+    // them; deep local file work happens in Workspace.
+    var outgoing = text;
+    if (_attachments.isNotEmpty) {
+      final names = _attachments.map((a) => a.name).join(', ');
+      outgoing = text.isEmpty
+          ? 'I attached: $names. Please analyze them.'
+          : '$text\n\n[Attachments: $names]';
+      if (widget.pageContext != null && widget.pageContext!.isNotEmpty) {
+        outgoing = '${widget.pageContext}\n\nUser: $outgoing';
+      }
+    } else if (widget.pageContext != null &&
+        widget.pageContext!.isNotEmpty &&
+        _messages.isEmpty) {
+      outgoing = '${widget.pageContext}\n\nUser: $outgoing';
+    }
     _controller.clear();
+    final shownText = text.isEmpty ? outgoing : text;
 
     setState(() {
       _messages.add(AgentChatMessage(
         id: 'u_${DateTime.now().millisecondsSinceEpoch}',
-        text: text,
+        text: shownText,
         isUser: true,
       ));
+      _attachments.clear();
       _isBusy = true;
     });
     _scrollToBottom();
 
     final aiService = Provider.of<AIService>(context, listen: false);
     AgentResponse result;
+    text = outgoing;
 
     if (_mode == 'image') {
       final imageData = await aiService.generateImage(text);
@@ -315,49 +386,181 @@ class _AgenticChatViewState extends State<AgenticChatView> {
           top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.2)),
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              autofocus: widget.autoFocus,
-              minLines: 1,
-              maxLines: 4,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _send(),
-              style: TextStyle(
-                  fontSize: 14, color: theme.colorScheme.onSurface),
-              decoration: InputDecoration(
-                hintText: 'Message ${_modeLabels[_mode]}...',
-                hintStyle:
-                    TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 13),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(22),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: theme.colorScheme.surfaceContainerHighest,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          if (widget.pageContext != null &&
+              widget.pageContext!.isNotEmpty &&
+              _messages.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  ActionChip(
+                    avatar: Icon(Icons.summarize_outlined,
+                        size: 14, color: theme.colorScheme.primary),
+                    label: const Text('Summarize this page',
+                        style: TextStyle(fontSize: 12)),
+                    onPressed: _isBusy
+                        ? null
+                        : () =>
+                            _send('Summarize the page I am viewing.'),
+                  ),
+                  ActionChip(
+                    avatar: Icon(Icons.help_outline,
+                        size: 14, color: theme.colorScheme.primary),
+                    label: const Text('Explain this page',
+                        style: TextStyle(fontSize: 12)),
+                    onPressed: _isBusy
+                        ? null
+                        : () =>
+                            _send('Explain the page I am viewing simply.'),
+                  ),
+                  ActionChip(
+                    avatar: Icon(Icons.auto_awesome,
+                        size: 14, color: theme.colorScheme.primary),
+                    label: const Text('Help with this page',
+                        style: TextStyle(fontSize: 12)),
+                    onPressed: _isBusy
+                        ? null
+                        : () => _send(
+                            'Help me with the task on the page I am viewing.'),
+                  ),
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _isBusy
-                  ? theme.colorScheme.onSurface.withValues(alpha: 0.3)
-                  : theme.colorScheme.primary,
+          if (_attachments.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: _attachments.asMap().entries.map((e) {
+                    return Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer
+                            .withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: theme.colorScheme.outline
+                              .withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            e.value.isFolder
+                                ? Icons.folder_outlined
+                                : Icons.attach_file_outlined,
+                            size: 16,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 6),
+                          ConstrainedBox(
+                            constraints:
+                                const BoxConstraints(maxWidth: 120),
+                            child: Text(
+                              e.value.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: () => setState(
+                                () => _attachments.removeAt(e.key)),
+                            child: Icon(
+                              Icons.close,
+                              size: 14,
+                              color: theme.colorScheme.error,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
             ),
-            child: IconButton(
-              onPressed: _isBusy ? null : () => _send(),
-              icon: const Icon(Icons.arrow_upward,
-                  color: Colors.white, size: 20),
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // "+" attach (files/folders/pictures/video/audio/links)
+              IconButton(
+                tooltip:
+                    'Attach files, folders, pictures, video, audio',
+                onPressed: _isBusy ? null : _openAttachSheet,
+                icon: const Icon(Icons.add_rounded),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  autofocus: widget.autoFocus,
+                  minLines: 1,
+                  maxLines: 4,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  style: TextStyle(
+                      fontSize: 14, color: theme.colorScheme.onSurface),
+                  decoration: InputDecoration(
+                    hintText: _listening
+                        ? 'Listening...'
+                        : 'Message ${_modeLabels[_mode]}...',
+                    hintStyle:
+                        TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 13),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                    filled: true,
+                    fillColor: theme.colorScheme.surfaceContainerHighest,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                ),
+              ),
+              // Camera: show a picture and ask about it
+              IconButton(
+                tooltip: 'Ask with camera',
+                onPressed: _isBusy ? null : _openCameraSheet,
+                icon: const Icon(Icons.camera_alt_outlined),
+              ),
+              // Mic: ask through voice
+              IconButton(
+                tooltip: _listening ? 'Stop listening' : 'Voice input',
+                onPressed: _isBusy ? null : _toggleVoice,
+                icon: Icon(
+                  _listening ? Icons.mic_rounded : Icons.mic_outlined,
+                  color: _listening ? theme.colorScheme.error : null,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _isBusy
+                      ? theme.colorScheme.onSurface.withValues(alpha: 0.3)
+                      : theme.colorScheme.primary,
+                ),
+                child: IconButton(
+                  onPressed: _isBusy ? null : () => _send(),
+                  icon: const Icon(Icons.arrow_upward,
+                      color: Colors.white, size: 20),
+                ),
+              ),
+            ],
           ),
         ],
       ),

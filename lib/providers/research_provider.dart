@@ -74,7 +74,20 @@ class ResearchProvider extends ChangeNotifier {
       _currentProgress = 'Planning research strategy...';
       notifyListeners();
 
+      // Perceived-speed: fire a quick web search in parallel so progress can
+      // report real source counts within ~2s while the deep agent still runs.
+      // The deep result below remains the source of truth for the report.
+      final quickSearch = _aiService.searchWeb(objective).then((r) {
+        if (_isResearching && r.isNotEmpty) {
+          _currentProgress = 'Found ${r.length} sources — analyzing...';
+          notifyListeners();
+        }
+        return r;
+      }).catchError((_) => <SearchResult>[]);
+
       final agentResult = await _aiService.runResearchAgent(objective);
+      // Await (already likely done) to avoid unhandled futures.
+      await quickSearch;
       final research = agentResult.research;
 
       if (research != null || agentResult.response.isNotEmpty) {

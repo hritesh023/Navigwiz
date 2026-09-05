@@ -33,9 +33,22 @@ class BrowserService extends ChangeNotifier {
   String get searchEngine => _searchEngine;
   String get homepageUrl => _homepageUrl;
 
+  /// Only the exact value 'google' enables Google. Any other value
+  /// (including null/empty/unknown) falls back to Navigwiz search.
+  /// This guarantees long/difficult questions never redirect to Google
+  /// unless the user explicitly picked Google in Settings.
+  static String sanitizeEngine(String? engine) {
+    final normalized = (engine ?? '').trim().toLowerCase();
+    if (normalized == 'google') return 'google';
+    return 'navigwiz';
+  }
+
+  bool get useGoogleSearch => _searchEngine == 'google';
+
   void setSearchEngine(String engine) {
-    if (_searchEngine == engine) return;
-    _searchEngine = engine;
+    final sanitized = sanitizeEngine(engine);
+    if (_searchEngine == sanitized) return;
+    _searchEngine = sanitized;
     notifyListeners();
   }
 
@@ -346,6 +359,10 @@ class BrowserService extends ChangeNotifier {
       return 'https://$url';
     }
 
+    // Explicit opt-in only: Google is used solely when the user picked it
+    // in Settings. Every other case — including long questions, questions
+    // with punctuation, or any unrecognized engine value — stays inside
+    // the Navigwiz frontend as custom Navigwiz Search results.
     if (_searchEngine == 'google') {
       final query = Uri.encodeComponent(url);
       return 'https://www.google.com/search?q=$query';

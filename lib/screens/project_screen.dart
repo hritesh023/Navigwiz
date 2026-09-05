@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import '../providers/project_provider.dart';
 import '../services/ai_service.dart';
 import '../utils/project_confirm.dart';
+import '../widgets/nav_search_bar.dart';
 
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
@@ -20,6 +21,7 @@ class _ProjectScreenState extends State<ProjectScreen> {
   String _selectedType = 'all';
   String _projectRoot = '';
   bool _generating = false;
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -339,55 +341,26 @@ class _ProjectScreenState extends State<ProjectScreen> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: Container(
-              height: 52,
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.grey[900]!.withValues(alpha: 0.95)
-                    : Colors.white.withValues(alpha: 0.95),
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.grey[700]!.withValues(alpha: 0.5)
-                      : Colors.grey[300]!.withValues(alpha: 0.5),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: (isDark ? Colors.black : Colors.grey[400]!)
-                        .withValues(alpha: isDark ? 0.3 : 0.1),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(width: 16),
-                  Icon(Icons.search, color: Colors.grey[500]),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      textInputAction: TextInputAction.search,
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: isDark ? Colors.white : Colors.black87,
+            child: NavSearchBar(
+              controller: _searchController,
+              hintText: 'Search or create files?...',
+              onSubmitted: (v) => setState(
+                  () => _searchQuery = v.trim().toLowerCase()),
+              onSubmitPressed: () => setState(() =>
+                  _searchQuery = _searchController.text.trim().toLowerCase()),
+              onAttachPressed: _showQuickCreateSheet,
+              onAttachmentsChanged: (files) {
+                if (files.isNotEmpty && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Attached ${files.map((f) => f.name).join(', ')} — describe what to build with them.',
                       ),
-                      decoration: InputDecoration(
-                        hintText: 'Search or create files...',
-                        hintStyle: TextStyle(color: Colors.grey[500]),
-                        border: InputBorder.none,
-                      ),
+                      duration: const Duration(seconds: 3),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.add_rounded),
-                    tooltip: 'Create new file/folder',
-                    onPressed: _showQuickCreateSheet,
-                  ),
-                  const SizedBox(width: 4),
-                ],
-              ),
+                  );
+                }
+              },
             ),
           ),
           Padding(
@@ -424,6 +397,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
             child: Consumer<ProjectProvider>(
               builder: (ctx, pp, _) {
                 var files = pp.files;
+                if (_searchQuery.isNotEmpty) {
+                  files = files
+                      .where((f) => f.name.toLowerCase().contains(_searchQuery))
+                      .toList();
+                }
                 if (_selectedType != 'all') {
                   if (_selectedType == 'code') {
                     files = files.where((f) =>

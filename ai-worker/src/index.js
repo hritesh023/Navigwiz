@@ -136,17 +136,26 @@ function withTimeout(promise, ms) {
   ]);
 }
 
-// Resolves with the first { ok: true } result, or { ok: false } after timeoutMs.
+// Resolves with the first { ok: true } result, or { ok: false } as soon as
+// every producer has settled without a success (or after timeoutMs).
 function raceSuccess(producers, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
+    let remaining = producers.length;
     const done = (val) => {
-      if (!settled && val && val.ok) {
+      if (settled) return;
+      if (val && val.ok) {
         settled = true;
         resolve(val);
+        return;
+      }
+      remaining -= 1;
+      if (remaining === 0) {
+        settled = true;
+        resolve({ ok: false });
       }
     };
-    for (const p of producers) p.then(done, () => {});
+    for (const p of producers) p.then(done, done);
     setTimeout(() => {
       if (!settled) {
         settled = true;
@@ -170,11 +179,11 @@ async function callWorkersAI(env, messages, maxTokens, temperature, jsonMode, ta
     const model = pickModel(task, jsonMode);
     const body = {
       messages,
-      max_tokens: Math.min(maxTokens, 3500),
+      max_tokens: Math.min(maxTokens, 4096),
       temperature,
     };
     if (jsonMode) body.response_format = { type: 'json_object' };
-    const resp = await withTimeout(env.AI.run(model, body), 28000);
+    const resp = await withTimeout(env.AI.run(model, body), 60000);
     const content =
       (resp && (resp.response || resp.output_text || resp.output || '')) || '';
     if (content.trim()) return { ok: true, content, provider: 'workers-ai', model };
@@ -190,7 +199,7 @@ async function callOracle(env, messages, maxTokens, temperature, jsonMode, model
   const oracleKey = env.ORACLE_LLM_KEY || '';
   const oracleModel = model || env.ORACLE_LLM_MODEL || 'qwen2.5:1.5b';
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000);
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
   const headers = { 'Content-Type': 'application/json' };
   if (oracleKey) headers['Authorization'] = `Bearer ${oracleKey}`;
   const body = {
@@ -198,9 +207,9 @@ async function callOracle(env, messages, maxTokens, temperature, jsonMode, model
     messages,
     temperature,
     stream: false,
+    max_tokens: Math.min(maxTokens, 4096),
   };
   if (jsonMode) body.response_format = { type: 'json_object' };
-  else body.max_tokens = Math.min(maxTokens, 2048);
   try {
     const resp = await fetch(`${oracleUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -231,14 +240,32 @@ async function callLLM({
   timeoutMs = 60000,
   task = 'chat',
 }) {
-  const producers = [callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task)];
+  // Chat answers are latency-sensitive: race Workers AI and Oracle in parallel
+  // and return whichever answers first. Quality tasks (research/project/code)
+  // give Workers AI a short head start, then race Oracle so a slow Workers AI
+  // never stalls the request. Generous timeouts mean long answers are never cut
+  // off; raceSuccess fail-fast returns an error only when every provider fails.
+  if (task === 'chat') {
+    const fast = await raceSuccess(
+      [
+        callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task),
+        callOracle(env, messages, maxTokens, temperature, jsonMode, model),
+      ],
+      timeoutMs
+    );
+    if (fast.ok) return fast.content;
+    throw new Error('LLM unavailable');
+  }
 
-  const fastMs = Math.min(timeoutMs, 32000);
-  const fast = await raceSuccess(producers, fastMs);
+  const workers = callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task);
+  const head = await raceSuccess([workers], Math.min(timeoutMs, 8000));
+  if (head.ok) return head.content;
+
+  const fast = await raceSuccess(
+    [workers, callOracle(env, messages, maxTokens, temperature, jsonMode, model)],
+    timeoutMs
+  );
   if (fast.ok) return fast.content;
-
-  const oracle = await callOracle(env, messages, maxTokens, temperature, jsonMode, model);
-  if (oracle.ok) return oracle.content;
 
   console.error('All LLM providers unavailable');
   throw new Error('LLM unavailable');
@@ -741,17 +768,19 @@ async function startpageSearch(query, maxResults = 10) {
 
 // Runs several independent search engines in parallel and merges their results
 // so the browser can reach the whole internet quickly and reliably.
+// Fast-first: tight per-engine caps so a single slow engine (often SearXNG or
+// DuckDuckGo HTML scraping) never stalls the whole answer.
 async function searchFromWeb(query, maxResults = 10) {
   const category = 'all';
 
   const [searxngResult, ddgHtml, bing, wiki, ddgApi, mojeek, startpage] = await Promise.all([
-    searchSearxng(query, category, maxResults),
-    withTimeout(duckDuckGoHtmlSearch(query, maxResults), 8000).catch(() => []),
-    withTimeout(bingSearch(query, maxResults), 8000).catch(() => []),
-    withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 5000).catch(() => []),
-    withTimeout(duckDuckGoApiSearch(query, maxResults), 6000).catch(() => []),
-    withTimeout(mojeekSearch(query, maxResults), 7000).catch(() => []),
-    withTimeout(startpageSearch(query, maxResults), 7000).catch(() => []),
+    withTimeout(searchSearxng(query, category, maxResults), 4000).catch(() => null),
+    withTimeout(duckDuckGoHtmlSearch(query, maxResults), 3500).catch(() => []),
+    withTimeout(bingSearch(query, maxResults), 3500).catch(() => []),
+    withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
+    withTimeout(duckDuckGoApiSearch(query, maxResults), 2500).catch(() => []),
+    withTimeout(mojeekSearch(query, maxResults), 3000).catch(() => []),
+    withTimeout(startpageSearch(query, maxResults), 3000).catch(() => []),
   ]);
 
   const merged = [];
@@ -812,12 +841,16 @@ async function planResearch(env, query) {
 }
 
 async function runResearch(env, query) {
-  const subQueries = await planResearch(env, query);
+  // Plan + main search run together: planning is LLM-bound and used to block
+  // all searching. Cap planning at 6s, then fall back to heuristics instantly.
+  const [subQueries, mainResults] = await Promise.all([
+    withTimeout(planResearch(env, query), 6000).catch(() => fallbackResearchQueries(query)),
+    searchFromWeb(query, 12),
+  ]);
 
-  const mainResults = await searchFromWeb(query, 12);
   const results = await runLimitedConcurrent(
     subQueries.slice(0, 4),
-    2,
+    4,
     async (sq) => {
       const found = await searchFromWeb(sq, 6);
       return found || [];
@@ -841,12 +874,13 @@ async function runResearch(env, query) {
   }
 
   // Deep research: fetch the actual page content of the top sources so the
-  // report is built from real facts, not just snippets.
+  // report is built from real facts, not just snippets. Capped at 5 pages so
+  // research shows results fast instead of crawling half the web first.
   const withContent = await runLimitedConcurrent(
-    topResults.slice(0, 8),
-    3,
+    topResults.slice(0, 5),
+    4,
     async (r) => {
-      const text = await extractPageContent(r.url, 1800);
+      const text = await extractPageContent(r.url, 1200);
       return text ? { ...r, page_text: text } : r;
     }
   );
@@ -905,14 +939,7 @@ async function runResearch(env, query) {
       research.references = researchSources.slice(0, 8).map((r) => ({ title: r.title, url: r.url }));
     }
   } catch (e) {
-    research.executive_summary = `I gathered the most relevant sources for "${query}" below. The full AI synthesis was unavailable, but these references are a great starting point.`;
-    research.key_findings = researchSources.slice(0, 6).map((r) => ({
-      title: r.title,
-      finding: (r.page_text || r.content || '').slice(0, 220),
-      sources: [r.url],
-    }));
-    research.recommendations = [];
-    research.references = researchSources.slice(0, 8).map((r) => ({ title: r.title, url: r.url }));
+    throw new Error('Research synthesis failed: the AI service is unavailable. Please try again.');
   }
 
   let markdown = `## ${query}\n\n### Executive Summary\n${research.executive_summary}\n\n### Key Findings\n`;
@@ -1099,9 +1126,9 @@ async function handleChat(request, env) {
       content = await callLLM({
         env,
         messages,
-        maxTokens: isSimple ? 800 : 1600,
+        maxTokens: isSimple ? 1024 : 3072,
         temperature: 0.7,
-        timeoutMs: 30000,
+        timeoutMs: isSimple ? 20000 : 45000,
         task: 'chat',
       });
     } catch (e) {
@@ -1225,22 +1252,33 @@ async function handleAgentBuild(request, env) {
   }
 }
 
-async function handleSearch(request) {
+async function handleSearch(request, ctx) {
   const url = new URL(request.url);
   const query = url.searchParams.get('q');
   if (!query) return respondError('Missing query parameter', 400);
   const category = url.searchParams.get('category') || 'all';
 
+  // Edge cache: identical searches within 5 minutes return instantly without
+  // touching any search engine. Applies to every page (search, research,
+  // projects, build, workspace) since they all hit /search.
+  try {
+    const cache = caches.default;
+    const cacheKey = new Request(url.toString(), { method: 'GET' });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+  } catch (_) {}
+
   // Fire every search engine in parallel so results come back fast and cover
-  // the whole internet, not just a handful of sites.
+  // the whole internet, not just a handful of sites. Tight caps: the first
+  // fast engines win; slow scrapers can't stall the response.
   const [searxngResult, ddgHtml, bing, wiki, ddgApi, mojeek, startpage] = await Promise.all([
-    searchSearxng(query, category, 50),
-    withTimeout(duckDuckGoHtmlSearch(query, 20), 8000).catch(() => []),
-    withTimeout(bingSearch(query, 15), 8000).catch(() => []),
-    withTimeout(wikipediaSearch(query, 8), 5000).catch(() => []),
-    withTimeout(duckDuckGoApiSearch(query, 10), 6000).catch(() => []),
-    withTimeout(mojeekSearch(query, 15), 7000).catch(() => []),
-    withTimeout(startpageSearch(query, 15), 7000).catch(() => []),
+    withTimeout(searchSearxng(query, category, 50), 4000).catch(() => null),
+    withTimeout(duckDuckGoHtmlSearch(query, 20), 3500).catch(() => []),
+    withTimeout(bingSearch(query, 15), 3500).catch(() => []),
+    withTimeout(wikipediaSearch(query, 8), 2500).catch(() => []),
+    withTimeout(duckDuckGoApiSearch(query, 10), 2500).catch(() => []),
+    withTimeout(mojeekSearch(query, 15), 3000).catch(() => []),
+    withTimeout(startpageSearch(query, 15), 3000).catch(() => []),
   ]);
 
   let merged = [];
@@ -1273,13 +1311,24 @@ async function handleSearch(request) {
 
   merged = cleanSearchResults(dedupeByUrl(merged)).slice(0, 50);
 
-  return respondJson({
+  const response = respondJson({
     results: merged,
     suggestions,
     infoboxes,
     answers,
     number_of_results: numberOfResults,
   });
+  response.headers.set('Cache-Control', 'public, max-age=300');
+
+  // Store in edge cache for instant repeat searches.
+  try {
+    if (ctx && ctx.waitUntil) {
+      const cacheKey = new Request(url.toString(), { method: 'GET' });
+      ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+    }
+  } catch (_) {}
+
+  return response;
 }
 
 async function handleImageProxy(request) {
@@ -1384,7 +1433,7 @@ async function handleImageEdit(request, env) {
   }
 }
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx) {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -1423,7 +1472,7 @@ async function handleRequest(request, env) {
 
     case '/search':
       if (request.method !== 'GET') return respondError('Method not allowed', 405);
-      return handleSearch(request);
+      return handleSearch(request, ctx);
 
     case '/image-proxy':
       if (request.method !== 'GET') return respondError('Method not allowed', 405);

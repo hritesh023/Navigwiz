@@ -8,6 +8,7 @@ import '../providers/workspace_provider.dart';
 import '../models/workspace.dart';
 import '../models/attachment.dart';
 import '../services/ai_service.dart';
+import '../services/input_actions.dart';
 
 class WorkspaceScreen extends StatefulWidget {
   const WorkspaceScreen({super.key});
@@ -19,6 +20,7 @@ class WorkspaceScreen extends StatefulWidget {
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final TextEditingController _messageController = TextEditingController();
   List<Attachment> _pendingAttachments = [];
+  bool _listening = false;
 
   @override
   void dispose() {
@@ -567,7 +569,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             children: [
               _buildWorkspaceTabs(wp, isDark),
               if (wp.activeWorkspace != null)
-                _buildWorkspaceHeader(wp.activeWorkspace!, isDark),
+                _buildStudioHeader(wp.activeWorkspace!, isDark),
               Expanded(
                 child: wp.activeWorkspace == null
                     ? Center(child: Text('Select a workspace tab',
@@ -673,59 +675,159 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
-  Widget _buildWorkspaceHeader(Workspace workspace, bool isDark) {
+  void _prefillStudioPrompt(String template) {
+    _messageController.text = template;
+    _messageController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _messageController.text.length),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Studio prompt ready — edit it, then press send.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Attractive studio header: workspace identity + freedom-mode explainer.
+  /// Unlike Research/Projects/Chat (which do exactly what is asked), the
+  /// workspace is a free-form studio: create video, apps, collages, anything.
+  Widget _buildStudioHeader(Workspace workspace, bool isDark) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(22),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: isDark
               ? [
-                  const Color(0xFF1A237E).withValues(alpha: 0.55),
-                  const Color(0xFF4A148C).withValues(alpha: 0.55),
+                  const Color(0xFF1A237E).withValues(alpha: 0.85),
+                  const Color(0xFF4A148C).withValues(alpha: 0.85),
+                  const Color(0xFF00695C).withValues(alpha: 0.6),
                 ]
               : [
-                  const Color(0xFF4F46E5).withValues(alpha: 0.10),
-                  const Color(0xFF9333EA).withValues(alpha: 0.10),
+                  const Color(0xFF4F46E5),
+                  const Color(0xFF9333EA),
+                  const Color(0xFF06B6D4),
                 ],
         ),
-        border: Border.all(
-          color: const Color(0xFF4F46E5).withValues(alpha: isDark ? 0.3 : 0.2),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(9),
-            decoration: BoxDecoration(
-              color: const Color(0xFF4F46E5),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.auto_awesome, color: Colors.white, size: 20),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF4F46E5).withValues(alpha: 0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.auto_awesome,
+                    color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(workspace.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        )),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${workspace.items.length} item${workspace.items.length == 1 ? '' : 's'} in this studio',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.3)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.explore_outlined,
+                        size: 13, color: Colors.white),
+                    SizedBox(width: 4),
+                    Text('Freedom mode',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Your free-form AI studio — create videos, apps, image collages, music, documents, anything. Research, Projects and AI Chat follow instructions; here you explore what AI can do.',
+            style: TextStyle(
+              fontSize: 12.5,
+              height: 1.45,
+              color: Colors.white.withValues(alpha: 0.92),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                Text(workspace.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  )),
-                const SizedBox(height: 2),
-                Text(
-                  '${workspace.items.length} item${workspace.items.length == 1 ? '' : 's'}  |  Ask AI to process files, links and notes',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                _StudioQuickAction(
+                  icon: Icons.videocam_outlined,
+                  label: 'Video',
+                  onTap: () => _prefillStudioPrompt(
+                      'Create a short video about: '),
+                ),
+                const SizedBox(width: 8),
+                _StudioQuickAction(
+                  icon: Icons.web_outlined,
+                  label: 'App',
+                  onTap: () => _prefillStudioPrompt(
+                      'Build an app that: '),
+                ),
+                const SizedBox(width: 8),
+                _StudioQuickAction(
+                  icon: Icons.photo_library_outlined,
+                  label: 'Collage',
+                  onTap: () => _prefillStudioPrompt(
+                      'Create a collage of images about: '),
+                ),
+                const SizedBox(width: 8),
+                _StudioQuickAction(
+                  icon: Icons.image_outlined,
+                  label: 'Image',
+                  onTap: () => _createAiImage(),
+                ),
+                const SizedBox(width: 8),
+                _StudioQuickAction(
+                  icon: Icons.description_outlined,
+                  label: 'Doc',
+                  onTap: () => _createDocument(),
                 ),
               ],
             ),
@@ -737,48 +839,126 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildWorkspaceContent(Workspace workspace) {
     if (workspace.items.isEmpty) {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(22),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isDark
-                      ? [
-                          const Color(0xFF1A237E).withValues(alpha: 0.55),
-                          const Color(0xFF4A148C).withValues(alpha: 0.55),
-                        ]
-                      : [
-                          const Color(0xFF4F46E5).withValues(alpha: 0.12),
-                          const Color(0xFF9333EA).withValues(alpha: 0.12),
-                        ],
-                ),
-              ),
-              child: const Icon(Icons.inbox_outlined, size: 44, color: Color(0xFF4F46E5)),
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        children: [
+          _buildExploreGrid(),
+          const SizedBox(height: 16),
+          Center(
+            child: Column(
+              children: [
+                Text('No items yet — pick a studio idea above,',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant)),
+                Text('or attach files / type below to get started',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant)),
+              ],
             ),
-            const SizedBox(height: 16),
-            Text('No items yet',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600,
-                color: Theme.of(context).colorScheme.onSurface)),
-            const SizedBox(height: 6),
-            Text('Attach files or type below to get started',
-              style: TextStyle(fontSize: 13,
-                color: Theme.of(context).colorScheme.onSurfaceVariant)),
-          ],
-        ),
+          ),
+        ],
       );
     }
 
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: workspace.items.length,
-      itemBuilder: (ctx, i) => _buildItemCard(workspace.items[i]),
+      itemCount: workspace.items.length + 1,
+      itemBuilder: (ctx, i) {
+        if (i == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildExploreGrid(compact: true),
+          );
+        }
+        return _buildItemCard(workspace.items[i - 1]);
+      },
+    );
+  }
+
+  /// Studio idea cards: video, app, collage, image, music, document.
+  Widget _buildExploreGrid({bool compact = false}) {
+    final ideas = [
+      _StudioIdea(
+        icon: Icons.videocam_outlined,
+        title: 'Create video',
+        subtitle: 'Short clips from text',
+        colors: [const Color(0xFFEF4444), const Color(0xFFF59E0B)],
+        onTap: () =>
+            _prefillStudioPrompt('Create a short video about: '),
+      ),
+      _StudioIdea(
+        icon: Icons.web_outlined,
+        title: 'Create app',
+        subtitle: 'Websites & tools',
+        colors: [const Color(0xFF4F46E5), const Color(0xFF06B6D4)],
+        onTap: () => _prefillStudioPrompt('Build an app that: '),
+      ),
+      _StudioIdea(
+        icon: Icons.photo_library_outlined,
+        title: 'Image collage',
+        subtitle: 'Combine pictures',
+        colors: [const Color(0xFF9333EA), const Color(0xFFEC4899)],
+        onTap: () =>
+            _prefillStudioPrompt('Create a collage of images about: '),
+      ),
+      _StudioIdea(
+        icon: Icons.image_outlined,
+        title: 'AI image',
+        subtitle: 'Generate art',
+        colors: [const Color(0xFF8B5CF6), const Color(0xFF3B82F6)],
+        onTap: () => _createAiImage(),
+      ),
+      _StudioIdea(
+        icon: Icons.audiotrack_outlined,
+        title: 'Audio & music',
+        subtitle: 'Voice, mixes',
+        colors: [const Color(0xFF10B981), const Color(0xFF14B8A6)],
+        onTap: () =>
+            _prefillStudioPrompt('Create audio about: '),
+      ),
+      _StudioIdea(
+        icon: Icons.description_outlined,
+        title: 'Document',
+        subtitle: 'Notes & drafts',
+        colors: [const Color(0xFF0EA5E9), const Color(0xFF6366F1)],
+        onTap: () => _createDocument(),
+      ),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('Explore the studio',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Theme.of(context).colorScheme.onSurface)),
+            const SizedBox(width: 6),
+            Icon(Icons.auto_awesome,
+                size: 14, color: Theme.of(context).colorScheme.primary),
+          ],
+        ),
+        const SizedBox(height: 10),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: compact ? 3 : 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: compact ? 1.1 : 1.6,
+          ),
+          itemCount: ideas.length,
+          itemBuilder: (ctx, i) => _StudioIdeaCard(idea: ideas[i]),
+        ),
+      ],
     );
   }
 
@@ -901,6 +1081,42 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
+  Future<void> _toggleVoice() async {
+    if (_listening) {
+      InputActions.stopVoice(onState: (v) {
+        if (mounted) setState(() => _listening = v);
+      });
+      return;
+    }
+    await InputActions.toggleVoice(
+      context,
+      _messageController,
+      onState: (v) {
+        if (mounted) setState(() => _listening = v);
+      },
+    );
+  }
+
+  void _askWithCamera() {
+    InputActions.showCameraSheet(
+      context,
+      onImage: (path) {
+        final name = path.split('/').last.split('\\').last;
+        setState(() {
+          _pendingAttachments.add(Attachment(
+            id: 'att_${DateTime.now().millisecondsSinceEpoch}',
+            name: name.isEmpty ? path : name,
+            path: path,
+            type: AttachmentType.image,
+          ));
+        });
+        if (_messageController.text.trim().isEmpty) {
+          _messageController.text = 'What do you see in this picture?';
+        }
+      },
+    );
+  }
+
   Widget _buildMessageBar() {
     return Container(
       padding: EdgeInsets.only(
@@ -924,10 +1140,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               icon: Icon(Icons.add_rounded,
                 color: Theme.of(context).colorScheme.onPrimaryContainer),
               onPressed: _showAttachmentPicker,
-              tooltip: 'Attach to Workspace',
+              tooltip: 'Attach files, folders, pictures, video, audio',
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(
             child: TextField(
               controller: _messageController,
@@ -935,7 +1151,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               onSubmitted: (_) => _submitMessage(),
               style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
               decoration: InputDecoration(
-                hintText: 'Ask AI to process attachments or add a note...',
+                hintText: _listening
+                    ? 'Listening...'
+                    : 'Ask AI to process attachments or add a note...',
                 hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(24),
@@ -947,7 +1165,22 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Ask with camera',
+            onPressed: _askWithCamera,
+            icon: const Icon(Icons.camera_alt_outlined),
+          ),
+          IconButton(
+            tooltip: _listening ? 'Stop listening' : 'Voice input',
+            onPressed: _toggleVoice,
+            icon: Icon(
+              _listening ? Icons.mic_rounded : Icons.mic_outlined,
+              color: _listening
+                  ? Theme.of(context).colorScheme.error
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 4),
           CircleAvatar(
             backgroundColor: Theme.of(context).colorScheme.primary,
             radius: 22,
@@ -957,6 +1190,130 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StudioQuickAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _StudioQuickAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(20),
+          border:
+              Border.all(color: Colors.white.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: Colors.white),
+            const SizedBox(width: 6),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StudioIdea {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final List<Color> colors;
+  final VoidCallback onTap;
+
+  const _StudioIdea({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.colors,
+    required this.onTap,
+  });
+}
+
+class _StudioIdeaCard extends StatelessWidget {
+  final _StudioIdea idea;
+
+  const _StudioIdeaCard({required this.idea});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: idea.onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              idea.colors[0].withValues(alpha: 0.16),
+              idea.colors[1].withValues(alpha: 0.10),
+            ],
+          ),
+          border: Border.all(
+            color: idea.colors[0].withValues(alpha: 0.25),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: idea.colors[0].withValues(alpha: 0.12),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: idea.colors),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(idea.icon, color: Colors.white, size: 20),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(idea.title,
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.onSurface)),
+                const SizedBox(height: 2),
+                Text(idea.subtitle,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

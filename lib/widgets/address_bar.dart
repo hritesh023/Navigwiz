@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/input_actions.dart';
 import '../utils/domain_helper.dart';
 import '../widgets/saturn_logo.dart';
 
@@ -37,6 +38,42 @@ class AddressBar extends StatefulWidget {
 class _AddressBarState extends State<AddressBar> {
   late TextEditingController _controller;
   bool _isEditing = false;
+  bool _listening = false;
+
+  Future<void> _dictate() async {
+    if (_listening) {
+      InputActions.stopVoice(onState: (v) {
+        if (mounted) setState(() => _listening = v);
+      });
+      return;
+    }
+    setState(() => _isEditing = true);
+    await InputActions.toggleVoice(
+      context,
+      _controller,
+      onState: (v) {
+        if (mounted) setState(() => _listening = v);
+      },
+    );
+  }
+
+  void _askWithCamera() {
+    setState(() => _isEditing = true);
+    InputActions.showCameraSheet(
+      context,
+      onImage: (path) {
+        final name = path.split('/').last.split('\\').last;
+        _controller.text = 'What is in this picture? ($name)';
+        setState(() => _isEditing = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Picture noted — press Go to search about it.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      },
+    );
+  }
 
   String _displayUrl(String url) {
     if (DomainHelper.isNavigwizSearchUrl(url)) {
@@ -54,6 +91,7 @@ class _AddressBarState extends State<AddressBar> {
 
   @override
   void dispose() {
+    if (_listening) InputActions.stopVoice();
     _controller.dispose();
     super.dispose();
   }
@@ -186,6 +224,20 @@ class _AddressBarState extends State<AddressBar> {
                 ),
               ),
 
+              const SizedBox(width: 4),
+              _buildMiniInputButton(
+                icon: _listening ? Icons.mic_rounded : Icons.mic_outlined,
+                tooltip: _listening ? 'Stop listening' : 'Voice search',
+                highlight: _listening,
+                onPressed: _dictate,
+              ),
+              const SizedBox(width: 2),
+              _buildMiniInputButton(
+                icon: Icons.camera_alt_outlined,
+                tooltip: 'Ask with camera',
+                onPressed: _askWithCamera,
+              ),
+
               if (widget.trailingActions.isNotEmpty) ...[
                 const SizedBox(width: 8),
                 ...widget.trailingActions,
@@ -316,6 +368,39 @@ class _AddressBarState extends State<AddressBar> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMiniInputButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    bool highlight = false,
+  }) {
+    final theme = Theme.of(context);
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: highlight
+              ? theme.colorScheme.error.withValues(alpha: 0.15)
+              : theme.colorScheme.surfaceContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: IconButton(
+          onPressed: onPressed,
+          icon: Icon(
+            icon,
+            size: 16,
+            color: highlight
+                ? theme.colorScheme.error
+                : theme.colorScheme.onSurface,
+          ),
+          padding: EdgeInsets.zero,
+        ),
       ),
     );
   }

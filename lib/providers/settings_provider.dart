@@ -22,13 +22,27 @@ class SettingsProvider extends ChangeNotifier {
   String get homepageUrl => _homepageUrl;
   bool get useGoogleSearch => _searchEngine == 'google';
 
+  static String sanitizeEngine(String? engine) {
+    final normalized = (engine ?? '').trim().toLowerCase();
+    if (normalized == 'google') return 'google';
+    return 'navigwiz';
+  }
+
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool('is_dark_mode') ?? false;
     _aiAssistantName = prefs.getString('ai_assistant_name') ?? 'Navigwiz';
     _userDisplayName = prefs.getString('user_display_name') ?? '';
     _userEmail = prefs.getString('user_email') ?? '';
-    _searchEngine = prefs.getString('search_engine') ?? 'navigwiz';
+    // Default is always Navigwiz. A stale 'google' value from an old install
+    // or a corrupted pref must never hijack searches: only keep 'google'
+    // when it was explicitly stored as such.
+    _searchEngine = sanitizeEngine(prefs.getString('search_engine'));
+    // Self-heal: persist the sanitized value so a bad pref can't linger.
+    final stored = prefs.getString('search_engine');
+    if (stored != _searchEngine) {
+      await prefs.setString('search_engine', _searchEngine);
+    }
     _adBlockEnabled = prefs.getBool('ad_block_enabled') ?? false;
     _homepageUrl = prefs.getString('homepage_url') ?? '';
 
@@ -42,9 +56,9 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> setSearchEngine(String engine) async {
-    _searchEngine = engine;
+    _searchEngine = sanitizeEngine(engine);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('search_engine', engine);
+    await prefs.setString('search_engine', _searchEngine);
     notifyListeners();
   }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -74,14 +75,16 @@ class _CachedSearchResults {
   final List<SearchResult> results;
   final DateTime storedAt;
   const _CachedSearchResults({required this.results, required this.storedAt});
-  bool get isFresh => DateTime.now().difference(storedAt).inMinutes < 5;
+  bool get isFresh => DateTime.now().difference(storedAt).inMinutes < 15;
+  bool get isUsable => DateTime.now().difference(storedAt).inMinutes < 60;
 }
 
 class _CachedFullResponse {
   final SearchResponse response;
   final DateTime storedAt;
   const _CachedFullResponse({required this.response, required this.storedAt});
-  bool get isFresh => DateTime.now().difference(storedAt).inMinutes < 5;
+  bool get isFresh => DateTime.now().difference(storedAt).inMinutes < 15;
+  bool get isUsable => DateTime.now().difference(storedAt).inMinutes < 60;
 }
 
 class AIMessage {
@@ -101,13 +104,16 @@ class AIMessage {
 }
 
 class AIService extends ChangeNotifier {
-  static const Duration _searchTimeout = Duration(seconds: 10);
+  static const Duration _searchTimeout = Duration(seconds: 8);
   static const int _maxResults = 50;
 
   final SecureStorageService _secureStorage = SecureStorageService();
   final LoggingService _logger = LoggingService();
   final Map<String, _CachedSearchResults> _searchCache = {};
   final Map<String, _CachedFullResponse> _fullSearchCache = {};
+  // Deduplicates concurrent identical searches so every surface
+  // (search, research, projects, build, workspace) shares one fast request.
+  final Map<String, Future<List<SearchResult>>> _inflightSearches = {};
 
   bool _isLoading = false;
 
@@ -122,18 +128,40 @@ class AIService extends ChangeNotifier {
     bool forceRefresh = false,
   }) async {
     final normalizedQuery = query.trim();
+    if (normalizedQuery.isEmpty) return const <SearchResult>[];
     final cacheKey = normalizedQuery.toLowerCase();
     final cachedResults = _searchCache[cacheKey];
     if (!forceRefresh && cachedResults != null && cachedResults.isFresh) {
       return cachedResults.results;
     }
-
-    final fromWorker = await _searchViaWorker(normalizedQuery, 'web');
-    if (fromWorker.isNotEmpty) {
-      return _cacheSearchResults(cacheKey, fromWorker);
+    // Stale-while-revalidate: show usable (stale) results instantly while a
+    // background refresh fetches fresh ones. Makes every page feel instant.
+    if (!forceRefresh && cachedResults != null && cachedResults.isUsable) {
+      _refreshInBackground(cacheKey, normalizedQuery);
+      return cachedResults.results;
     }
 
-    return const <SearchResult>[];
+    // Share one network request across concurrent callers.
+    final inflight = _inflightSearches[cacheKey];
+    if (!forceRefresh && inflight != null) return inflight;
+
+    final future = _searchViaWorker(normalizedQuery, 'web').then((fromWorker) {
+      if (fromWorker.isNotEmpty) return _cacheSearchResults(cacheKey, fromWorker);
+      // Keep stale results rather than flashing empty on transient errors.
+      if (cachedResults != null) return cachedResults.results;
+      return const <SearchResult>[];
+    }).whenComplete(() => _inflightSearches.remove(cacheKey));
+    _inflightSearches[cacheKey] = future;
+    return future;
+  }
+
+  void _refreshInBackground(String cacheKey, String query) {
+    if (_inflightSearches.containsKey(cacheKey)) return;
+    final future = _searchViaWorker(query, 'web').then((fromWorker) {
+      if (fromWorker.isNotEmpty) return _cacheSearchResults(cacheKey, fromWorker);
+      return _searchCache[cacheKey]?.results ?? const <SearchResult>[];
+    }).whenComplete(() => _inflightSearches.remove(cacheKey));
+    _inflightSearches[cacheKey] = future;
   }
 
   Future<SearchResponse> searchWithOverview(
@@ -201,10 +229,14 @@ class AIService extends ChangeNotifier {
     if (!forceRefresh) {
       final cached = _fullSearchCache[cacheKey];
       if (cached != null && cached.isFresh) return cached.response;
+      if (cached != null && cached.isUsable) {
+        // Return stale instantly; refresh behind the scenes.
+        unawaited(_refreshFullInBackground(cacheKey, normalizedQuery));
+        return cached.response;
+      }
     }
 
     List<SearchResult> results = [];
-    List<String> suggestions = [];
 
     try {
       results = await searchWeb(query, forceRefresh: forceRefresh);
@@ -213,7 +245,7 @@ class AIService extends ChangeNotifier {
     final searchResponse = SearchResponse(
       aiAnswer: '',
       results: results,
-      suggestions: suggestions,
+      suggestions: _suggestionsFor(query, results),
       infoboxes: const [],
       answers: const [],
       resultCount: results.length,
@@ -223,28 +255,65 @@ class AIService extends ChangeNotifier {
     return searchResponse;
   }
 
+  Future<void> _refreshFullInBackground(String cacheKey, String query) async {
+    try {
+      final results = await searchWeb(query, forceRefresh: true);
+      _fullSearchCache[cacheKey] = _CachedFullResponse(
+        response: SearchResponse(
+          aiAnswer: '',
+          results: results,
+          suggestions: _suggestionsFor(query, results),
+          infoboxes: const [],
+          answers: const [],
+          resultCount: results.length,
+        ),
+        storedAt: DateTime.now(),
+      );
+    } catch (_) {}
+  }
+
+  List<String> _suggestionsFor(String query, List<SearchResult> results) {
+    final out = <String>[];
+    for (final r in results.take(6)) {
+      final title = r.title.trim();
+      if (title.isNotEmpty && title.toLowerCase() != query.trim().toLowerCase()) {
+        out.add(title);
+        if (out.length >= 3) break;
+      }
+    }
+    return out;
+  }
+
   Future<List<SearchResult>> _searchViaWorker(String query, String category) async {
     if (!AppConfig.hasWorker) return [];
 
-    try {
-      final uri = Uri.parse('${AppConfig.workerUrl}/search').replace(queryParameters: {
-        'q': query,
-        'category': category,
-      });
-      final response = await http.get(uri, headers: {'Accept': 'application/json'}).timeout(_searchTimeout);
+    // One quick retry: transient worker hiccups shouldn't cost a full 8s wait.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final uri = Uri.parse('${AppConfig.workerUrl}/search').replace(queryParameters: {
+          'q': query,
+          'category': category,
+        });
+        final response = await http.get(uri, headers: {'Accept': 'application/json'}).timeout(
+          attempt == 0 ? const Duration(seconds: 5) : _searchTimeout,
+        );
 
-      if (response.statusCode != 200) return [];
+        if (response.statusCode != 200) continue;
 
-      final decoded = json.decode(response.body);
-      if (decoded is! Map<String, dynamic>) return [];
+        final decoded = json.decode(response.body);
+        if (decoded is! Map<String, dynamic>) return [];
 
-      final rawResults = decoded['results'];
-      if (rawResults is! List || rawResults.isEmpty) return [];
+        final rawResults = decoded['results'];
+        if (rawResults is! List || rawResults.isEmpty) return [];
 
-      return _parseWorkerResults(rawResults);
-    } catch (_) {
-      return [];
+        return _parseWorkerResults(rawResults);
+      } catch (_) {
+        if (attempt == 1) return [];
+        // Brief backoff before the single retry.
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
     }
+    return [];
   }
 
   List<SearchResult> _parseWorkerResults(List rawResults) {

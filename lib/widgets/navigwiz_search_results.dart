@@ -33,12 +33,27 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
     final response = await aiService.searchWithOverview(
       widget.query,
       forceRefresh: true,
+      waitForAi: false,
     );
 
     if (!mounted) return;
     setState(() {
       _searchResponse = response;
       _isLoading = false;
+    });
+
+    final aiAnswer = await aiService.getAiAnswerForSearch(response.results, widget.query);
+    if (!mounted || aiAnswer.isEmpty) return;
+    setState(() {
+      _searchResponse = SearchResponse(
+        aiAnswer: aiAnswer,
+        results: response.results,
+        suggestions: response.suggestions,
+        infoboxes: response.infoboxes,
+        answers: response.answers,
+        resultCount: response.resultCount,
+        searchTime: response.searchTime,
+      );
     });
   }
 
