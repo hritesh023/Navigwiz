@@ -19,6 +19,7 @@ class NavigwizSearchResults extends StatefulWidget {
 class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
   SearchResponse? _searchResponse;
   bool _isLoading = true;
+  bool _isAiLoading = true;
 
   @override
   void initState() {
@@ -28,8 +29,14 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
 
   Future<void> _performSearch() async {
     final aiService = Provider.of<AIService>(context, listen: false);
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _isAiLoading = true;
+    });
 
+    // 1) Web results + photos first (fast), so the page appears instantly.
+    // 2) AI Overview streams in at the TOP as soon as it is ready — the AI
+    //    answer always comes first in the layout, links/photos follow below.
     final response = await aiService.searchWithOverview(
       widget.query,
       forceRefresh: true,
@@ -40,20 +47,30 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
     setState(() {
       _searchResponse = response;
       _isLoading = false;
+      // Keep the AI skeleton visible at the top until the answer arrives.
+      _isAiLoading = true;
     });
 
-    final aiAnswer = await aiService.getAiAnswerForSearch(response.results, widget.query);
-    if (!mounted || aiAnswer.isEmpty) return;
+    final aiAnswer =
+        await aiService.getAiAnswerForSearch(response.results, widget.query);
+    if (!mounted) return;
     setState(() {
-      _searchResponse = SearchResponse(
-        aiAnswer: aiAnswer,
-        results: response.results,
-        suggestions: response.suggestions,
-        infoboxes: response.infoboxes,
-        answers: response.answers,
-        resultCount: response.resultCount,
-        searchTime: response.searchTime,
-      );
+      _isAiLoading = false;
+      if (aiAnswer.isNotEmpty) {
+        _searchResponse = SearchResponse(
+          aiAnswer: aiAnswer,
+          results: response.results,
+          imageResults: response.imageResults,
+          newsResults: response.newsResults,
+          videoResults: response.videoResults,
+          bookResults: response.bookResults,
+          suggestions: response.suggestions,
+          infoboxes: response.infoboxes,
+          answers: response.answers,
+          resultCount: response.resultCount,
+          searchTime: response.searchTime,
+        );
+      }
     });
   }
 
@@ -114,13 +131,21 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
   Widget _buildResults(ThemeData theme) {
     final response = _searchResponse;
     final results = response?.results ?? <SearchResult>[];
+    final images = response?.imageResults ?? <SearchResult>[];
     final items = <Widget>[];
 
-    if (response?.aiAnswer.isNotEmpty ?? false) {
-      items.add(Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: _buildAiAnswer(theme),
-      ));
+    // AI Overview ALWAYS first — live answer, loading skeleton, or fallback.
+    items.add(Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: _isAiLoading && (response?.aiAnswer.isEmpty ?? true)
+          ? _buildAiLoading(theme)
+          : (response?.aiAnswer.isNotEmpty ?? false)
+              ? _buildAiAnswer(theme)
+              : _buildAiEmpty(theme),
+    ));
+    // Photos strip when the query merits visuals (image results present).
+    if (images.isNotEmpty) {
+      items.add(_buildImageStrip(theme, images));
     }
     if (response != null && response.suggestions.isNotEmpty) {
       items.add(_buildSuggestions(theme));
@@ -278,6 +303,178 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
           MarkdownBody(text: answer, onOpenUrl: _openUrl),
         ],
       ),
+    );
+  }
+
+  Widget _buildAiLoading(ThemeData theme) {
+    final primary = theme.colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: primary.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: primary,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.all(5),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('AI Overview — answering…',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.onSurface)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _shimmerLine(theme, double.infinity),
+          const SizedBox(height: 8),
+          _shimmerLine(theme, double.infinity),
+          const SizedBox(height: 8),
+          _shimmerLine(theme, 180),
+        ],
+      ),
+    );
+  }
+
+  Widget _shimmerLine(ThemeData theme, double width) {
+    return Container(
+      width: width,
+      height: 12,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(6),
+      ),
+    );
+  }
+
+  Widget _buildAiEmpty(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: theme.dividerColor.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.auto_awesome,
+              size: 16, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'AI Overview is unavailable right now — results below are still fresh.',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImageStrip(ThemeData theme, List<SearchResult> images) {
+    final withThumbs =
+        images.where((r) => (r.imageUrl ?? '').isNotEmpty).take(10).toList();
+    final fallback = withThumbs.isEmpty
+        ? images.take(10).toList()
+        : withThumbs;
+    if (fallback.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Row(
+            children: [
+              Icon(Icons.image_outlined,
+                  size: 15, color: theme.colorScheme.primary),
+              const SizedBox(width: 6),
+              Text('Photos',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.onSurface)),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 120,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: fallback.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, i) {
+              final r = fallback[i];
+              final thumb = (r.imageUrl ?? '').isNotEmpty
+                  ? r.imageUrl!
+                  : r.url;
+              return GestureDetector(
+                onTap: () => _openUrl(r.url),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 150,
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(
+                          thumb,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Text(r.title,
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: theme
+                                          .colorScheme.onSurfaceVariant)),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 4),
+                            color: Colors.black.withValues(alpha: 0.55),
+                            child: Text(r.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 10, color: Colors.white)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

@@ -173,6 +173,7 @@ class AIService extends ChangeNotifier {
     final stopwatch = Stopwatch()..start();
 
     List<SearchResult> results = [];
+    List<SearchResult> imageResults = [];
     List<String> suggestions = [];
     List<Infobox> infoboxes = [];
     List<String> answers = [];
@@ -185,6 +186,18 @@ class AIService extends ChangeNotifier {
     answers = fullResponse.answers;
     resultCount = fullResponse.resultCount;
 
+    // Photos are fetched in parallel so image-heavy questions ("photos of…",
+    // "what does X look like") get a visual strip without slowing the AI
+    // overview. Best-effort: never fails the whole search.
+    try {
+      imageResults = await searchImages(query).timeout(
+        const Duration(seconds: 6),
+        onTimeout: () => const <SearchResult>[],
+      );
+    } catch (_) {
+      imageResults = const <SearchResult>[];
+    }
+
     String aiAnswer = '';
     if (waitForAi) {
       aiAnswer = await getAiAnswerForSearch(results, query);
@@ -196,6 +209,7 @@ class AIService extends ChangeNotifier {
     return SearchResponse(
       aiAnswer: aiAnswer,
       results: results,
+      imageResults: imageResults,
       suggestions: suggestions,
       infoboxes: infoboxes,
       answers: answers,
@@ -204,13 +218,29 @@ class AIService extends ChangeNotifier {
     );
   }
 
+  /// AI Overview: always answers FIRST with the power of AI (latest, correct),
+  /// then the caller renders links/photos below it. Even with zero web
+  /// results we still ask the AI directly so the user never gets a blank page.
   Future<String> getAiAnswerForSearch(List<SearchResult> results, String query) async {
-    if (results.isEmpty) return '';
+    final now = DateTime.now().toUtc().toIso8601String();
+    const baseInstructions =
+        'You are the Navigwiz AI Overview. Answer the user query FIRST, directly and completely. '
+        'Rules: (1) Always give the appropriate, latest and correct answer — use the search results plus your knowledge and today\'s date. '
+        '(2) If the question needs current info (prices, scores, news, versions, dates), prefer the freshest search result. '
+        '(3) Structure: start with a direct answer in 1-3 sentences, then key details as short bullets when helpful. '
+        '(4) Cite sources inline by domain when you use them, e.g. (example.com). '
+        '(5) Never say you lack browsing or that knowledge is outdated. Be concise but complete.';
     try {
+      if (results.isEmpty) {
+        return await _askAi(
+          'Query: $query\n\nToday (UTC): $now\n\nNo web results were found. Answer from your knowledge as accurately and up-to-date as possible.',
+          extraInstructions: baseInstructions,
+        );
+      }
       final sourceText = results.take(10).map((r) => '- ${r.title}\n  URL: ${r.url}\n  Snippet: ${r.description}').join('\n');
       return await _askAi(
-        'Query: $query\n\nSearch results:\n$sourceText',
-        extraInstructions: 'Provide a concise answer to the query based on search results. Be brief and informative.',
+        'Query: $query\n\nToday (UTC): $now\n\nSearch results:\n$sourceText',
+        extraInstructions: baseInstructions,
       );
     } catch (_) {
       return '';

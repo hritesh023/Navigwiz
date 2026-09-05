@@ -175,34 +175,42 @@ class CustomizationPanel extends StatelessWidget {
 
   Widget _buildBackgroundPreview(
       BuildContext context, ThemeService themeService) {
-    return Container(
-      height: 100,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-            color: Theme.of(context).dividerColor.withValues(alpha: 0.3)),
-        image: themeService.hasBackgroundMedia
-            ? DecorationImage(
-                image: MemoryImage(themeService.backgroundImageBytes!),
+    final hasMedia = themeService.hasBackgroundMedia &&
+        themeService.backgroundImageBytes != null;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        height: 100,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: Theme.of(context).dividerColor.withValues(alpha: 0.3)),
+        ),
+        child: hasMedia
+            ? Image.memory(
+                themeService.backgroundImageBytes!,
                 fit: BoxFit.cover,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, __, ___) => _buildNoBackground(),
               )
-            : null,
+            : _buildNoBackground(),
       ),
-      child: themeService.hasBackgroundMedia
-          ? null
-          : Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.wallpaper,
-                      size: 28, color: Colors.grey[500]),
-                  const SizedBox(height: 4),
-                  Text('No background image',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-                ],
-              ),
-            ),
+    );
+  }
+
+  Widget _buildNoBackground() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.wallpaper, size: 28, color: Colors.grey[500]),
+          const SizedBox(height: 4),
+          Text('No background image',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+        ],
+      ),
     );
   }
 
@@ -247,26 +255,75 @@ class CustomizationPanel extends StatelessWidget {
 
   Future<void> _pickImage(
       BuildContext context, ThemeService themeService) async {
-    final result =
-        await FilePicker.platform.pickFiles(type: FileType.image);
-    if (result == null || result.files.isEmpty) return;
-    final bytes = await _readBytes(result.files.first);
-    if (bytes == null) return;
-    themeService.setBackgroundImageBytes(bytes,
-        path: result.files.first.path);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final bytes = await _readBytes(result.files.first);
+      if (bytes == null || bytes.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not read that file.')),
+          );
+        }
+        return;
+      }
+      await themeService.setBackgroundImageBytes(bytes,
+          path: result.files.first.path ?? result.files.first.name);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Background updated'),
+              duration: Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not set background: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _pickGif(
       BuildContext context, ThemeService themeService) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['gif'],
-    );
-    if (result == null || result.files.isEmpty) return;
-    final bytes = await _readBytes(result.files.first);
-    if (bytes == null) return;
-    themeService.setBackgroundImageBytes(bytes,
-        path: result.files.first.path);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['gif'],
+        allowMultiple: false,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final bytes = await _readBytes(result.files.first);
+      if (bytes == null || bytes.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not read that GIF.')),
+          );
+        }
+        return;
+      }
+      await themeService.setBackgroundImageBytes(bytes,
+          path: result.files.first.path ?? result.files.first.name);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Animated background updated'),
+              duration: Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not set GIF background: $e')),
+        );
+      }
+    }
   }
 
   Future<Uint8List?> _readBytes(PlatformFile file) async {

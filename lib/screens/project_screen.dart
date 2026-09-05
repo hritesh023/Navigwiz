@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/project_provider.dart';
 import '../services/ai_service.dart';
+import '../services/browser_service.dart';
 import '../utils/project_confirm.dart';
 import '../widgets/nav_search_bar.dart';
 
@@ -22,6 +23,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
   String _projectRoot = '';
   bool _generating = false;
   String _searchQuery = '';
+  // AI Overview for the project search bar: AI answers first, local files
+  // and web links follow below.
+  String _projectAiAnswer = '';
+  List<SearchResult> _projectAiSources = const [];
+  bool _projectAiLoading = false;
 
   @override
   void initState() {
@@ -54,6 +60,32 @@ class _ProjectScreenState extends State<ProjectScreen> {
     _searchController.dispose();
     _nameController.dispose();
     super.dispose();
+  }
+
+  /// Project search bar: filters local files AND fetches an AI Overview first
+  /// (same behavior as every other search bar in the app).
+  Future<void> _onProjectSearch(String value) async {
+    final q = value.trim().toLowerCase();
+    setState(() {
+      _searchQuery = q;
+      _projectAiAnswer = '';
+      _projectAiSources = const [];
+      _projectAiLoading = q.length >= 3;
+    });
+    if (q.length < 3) return;
+    try {
+      final aiService = Provider.of<AIService>(context, listen: false);
+      final res = await aiService.searchWithOverview(value.trim(),
+          forceRefresh: false, waitForAi: true);
+      if (!mounted) return;
+      setState(() {
+        _projectAiAnswer = res.aiAnswer;
+        _projectAiSources = res.results.take(5).toList();
+        _projectAiLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _projectAiLoading = false);
+    }
   }
 
   Future<void> _createFromTemplate(String template) async {
@@ -178,64 +210,65 @@ class _ProjectScreenState extends State<ProjectScreen> {
 
   Future<void> _generateWithAi() async {
     final descriptionController = TextEditingController();
-    String language = 'html';
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          backgroundColor: Theme.of(context).colorScheme.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('Generate with AI',
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: descriptionController,
-                autofocus: true,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  hintText: 'Describe the app or website you want...',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                style:
-                    TextStyle(color: Theme.of(context).colorScheme.onSurface),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Generate with AI',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: descriptionController,
+              autofocus: true,
+              maxLines: 4,
+              decoration: InputDecoration(
+                hintText:
+                    'Describe anything you want to build...\ne.g. "a Rust CLI todo app", "a Go REST API", "a Flutter weather app", "a Python ML script"...',
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
               ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: language,
-                decoration: InputDecoration(
-                  labelText: 'Language',
-                  border:
-                      OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              style:
+                  TextStyle(color: Theme.of(context).colorScheme.onSurface),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(Icons.auto_awesome,
+                    size: 14,
+                    color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'AI picks the best language & stack for your idea automatically — any language, any framework.',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant),
+                  ),
                 ),
-                items: const [
-                  DropdownMenuItem(value: 'html', child: Text('HTML / CSS / JS')),
-                  DropdownMenuItem(value: 'python', child: Text('Python')),
-                  DropdownMenuItem(value: 'javascript', child: Text('JavaScript')),
-                  DropdownMenuItem(value: 'dart', child: Text('Dart')),
-                ],
-                onChanged: (v) {
-                  if (v != null) setState(() => language = v);
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                if (descriptionController.text.trim().isNotEmpty) {
-                  Navigator.pop(ctx, true);
-                }
-              },
-              child: const Text('Generate'),
+              ],
             ),
           ],
         ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (descriptionController.text.trim().isNotEmpty) {
+                Navigator.pop(ctx, true);
+              }
+            },
+            child: const Text('Generate'),
+          ),
+        ],
       ),
     );
 
@@ -246,9 +279,10 @@ class _ProjectScreenState extends State<ProjectScreen> {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
 
     try {
+      // No language restriction: the AI infers the right language/stack
+      // from the user's requirements.
       final result = await aiService.buildProjectAgent(
         descriptionController.text.trim(),
-        language: language,
       );
 
       if (!mounted) return;
@@ -343,11 +377,10 @@ class _ProjectScreenState extends State<ProjectScreen> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: NavSearchBar(
               controller: _searchController,
-              hintText: 'Search or create files?...',
-              onSubmitted: (v) => setState(
-                  () => _searchQuery = v.trim().toLowerCase()),
-              onSubmitPressed: () => setState(() =>
-                  _searchQuery = _searchController.text.trim().toLowerCase()),
+              hintText: 'Ask AI or search files?...',
+              onSubmitted: _onProjectSearch,
+              onSubmitPressed: () =>
+                  _onProjectSearch(_searchController.text),
               onAttachPressed: _showQuickCreateSheet,
               onAttachmentsChanged: (files) {
                 if (files.isNotEmpty && mounted) {
@@ -363,6 +396,16 @@ class _ProjectScreenState extends State<ProjectScreen> {
               },
             ),
           ),
+          if (_searchQuery.isNotEmpty &&
+              (_projectAiLoading || _projectAiAnswer.isNotEmpty))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: _ProjectAiOverview(
+                loading: _projectAiLoading,
+                answer: _projectAiAnswer,
+                sources: _projectAiSources,
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
@@ -598,6 +641,109 @@ class _TemplateChip extends StatelessWidget {
       avatar: Icon(icon, size: 18),
       label: Text(label),
       onPressed: onTap,
+    );
+  }
+}
+
+/// AI Overview card for the Projects search bar: AI answer first, then links.
+class _ProjectAiOverview extends StatelessWidget {
+  final bool loading;
+  final String answer;
+  final List<SearchResult> sources;
+
+  const _ProjectAiOverview({
+    required this.loading,
+    required this.answer,
+    required this.sources,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            primary.withValues(alpha: 0.12),
+            theme.colorScheme.primaryContainer.withValues(alpha: 0.18),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: primary.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: primary,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: loading
+                    ? const Padding(
+                        padding: EdgeInsets.all(5),
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.auto_awesome,
+                        size: 14, color: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              Text(loading ? 'AI Overview — answering…' : 'AI Overview',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.onSurface)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (loading)
+            Text('Getting the latest answer for you…',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurfaceVariant))
+          else
+            Text(answer,
+                style: TextStyle(
+                    fontSize: 13,
+                    height: 1.45,
+                    color: theme.colorScheme.onSurface)),
+          if (!loading && sources.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: sources.map((s) {
+                String host = s.url;
+                try {
+                  host = Uri.parse(s.url).host.replaceFirst('www.', '');
+                } catch (_) {}
+                return ActionChip(
+                  avatar: Icon(Icons.link,
+                      size: 12, color: theme.colorScheme.primary),
+                  label: Text(host,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11)),
+                  onPressed: () {
+                    try {
+                      Provider.of<BrowserService>(context, listen: false)
+                          .navigateToUrl(s.url);
+                    } catch (_) {}
+                  },
+                  visualDensity: VisualDensity.compact,
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

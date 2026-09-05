@@ -442,6 +442,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             Image.memory(
               themeService.backgroundImageBytes!,
               fit: BoxFit.cover,
+              gaplessPlayback: true,
+              filterQuality: FilterQuality.medium,
               opacity: isPrivate
                   ? const AlwaysStoppedAnimation(0.35)
                   : const AlwaysStoppedAnimation(0.55),

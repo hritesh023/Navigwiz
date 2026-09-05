@@ -966,7 +966,15 @@ async function generateProject(env, description, language, extraContext = '') {
   const researchBlock = extraContext
     ? `\n\nI searched the web for you and gathered this up-to-date context. Use it to make the project accurate, realistic and current (correct package names, API endpoints, prices, platforms, etc.):\n${extraContext}`
     : '';
-  const system = `${AGENT_IDENTITY}\n\nYou are also an expert software engineer. Generate a complete, runnable ${language || ''} project from the user's description.
+  // No language restriction: when the client sends no language, the AI must
+  // infer the best language/stack from the user's requirements. ANY
+  // programming language or framework is allowed (Rust, Go, TypeScript,
+  // Flutter, Python, Java, C#, Kotlin, Swift, PHP, Ruby, etc.).
+  const trimmedLang = (language || '').trim();
+  const stackDirective = trimmedLang
+    ? `Generate a complete, runnable ${trimmedLang} project from the user's description.`
+    : `Detect the best programming language and stack from the user's description and generate a complete, runnable project in it. If the user names a language/framework, use exactly that; otherwise pick the most appropriate one for the task. Set the "language" field to whatever you chose.`;
+  const system = `${AGENT_IDENTITY}\n\nYou are also an expert polyglot software engineer. ${stackDirective}
 Respond with JSON ONLY in this exact shape (no markdown fences):
 {
   "project_name": "kebab-case-name",
@@ -975,7 +983,8 @@ Respond with JSON ONLY in this exact shape (no markdown fences):
   "files": { "path/relative/file.ext": "full file content" }
 }
 Requirements:
-- Every file path must be relative (e.g. "src/app.py", "index.html").
+- Support ANY language/framework the user asks for — never limit yourself to HTML/Python/Dart/JavaScript.
+- Every file path must be relative (e.g. "src/app.py", "index.html", "src/main.rs", "cmd/server/main.go").
 - Escape all newlines inside file strings properly.
 - Include a README.md with setup + run instructions.
 - Keep the project focused and minimal but complete and runnable.
@@ -1003,7 +1012,7 @@ Requirements:
       if (Object.keys(files).length > 0) {
         return {
           project_name: parsed.project_name || 'my-project',
-          language: parsed.language || language || 'html',
+          language: parsed.language || trimmedLang || 'auto',
           summary: parsed.summary || description,
           files,
         };
