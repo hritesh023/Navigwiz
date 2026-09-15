@@ -6,12 +6,12 @@ from app.config.settings import settings
 
 router = APIRouter()
 
-ORACLE_LLM_URL = os.getenv("ORACLE_LLM_URL", "https://oracle.acronous.com")
-ORACLE_LLM_MODEL = os.getenv("ORACLE_LLM_MODEL", "qwen2.5:1.5b")
-ORACLE_LLM_KEY = os.getenv("ORACLE_LLM_KEY", "")
+CONTABO_LLM_URL = os.getenv("CONTABO_LLM_URL", "https://brain.acronous.com")
+CONTABO_LLM_MODEL = os.getenv("CONTABO_LLM_MODEL", "qwen2.5:1.5b")
+CONTABO_LLM_KEY = os.getenv("CONTABO_LLM_KEY", "")
 
 
-async def _call_llm(messages: list, model: str = ORACLE_LLM_MODEL, stream: bool = False):
+async def _call_llm(messages: list, model: str = CONTABO_LLM_MODEL, stream: bool = False):
     body = {
         "model": model,
         "messages": messages,
@@ -22,12 +22,12 @@ async def _call_llm(messages: list, model: str = ORACLE_LLM_MODEL, stream: bool 
         body["stream"] = True
     import httpx
     headers = {
-        "Authorization": f"Bearer {ORACLE_LLM_KEY}",
+        "Authorization": f"Bearer {CONTABO_LLM_KEY}",
         "Content-Type": "application/json",
     }
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
-            f"{ORACLE_LLM_URL}/v1/chat/completions",
+            f"{CONTABO_LLM_URL}/v1/chat/completions",
             json=body,
             headers=headers,
         )
@@ -103,20 +103,20 @@ async def v1_chat_stream(request: Request):
     async def event_stream():
         import httpx
         llm_body = {
-            "model": ORACLE_LLM_MODEL,
+            "model": CONTABO_LLM_MODEL,
             "messages": messages,
             "max_tokens": 4096,
             "temperature": 0.7,
             "stream": True,
         }
         headers = {
-            "Authorization": f"Bearer {ORACLE_LLM_KEY}",
+            "Authorization": f"Bearer {CONTABO_LLM_KEY}",
             "Content-Type": "application/json",
         }
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream(
                 "POST",
-                f"{ORACLE_LLM_URL}/v1/chat/completions",
+                f"{CONTABO_LLM_URL}/v1/chat/completions",
                 json=llm_body,
                 headers=headers,
             ) as resp:

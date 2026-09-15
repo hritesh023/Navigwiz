@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Navigwiz + Acronous AI — Oracle Cloud Free Tier setup (Ubuntu, ARM64/Ampere)
+# Navigwiz + Acronous AI — Contabo Cloud VPS 8 setup (Ubuntu, ARM64/Ampere)
 #
 #  1. Ollama          -> unlimited local LLM token generation (no rate limits)
-#  2. cloudflared     -> Cloudflare Tunnel "acronous-oracle" (oracle.acronous.com)
+#  2. cloudflared     -> Cloudflare Tunnel "acronous-contabo" (brain.acronous.com)
 #  3. (optional) Backend FastAPI via Docker Compose, bound to localhost only
 #
-# Run as root:  sudo bash setup_oracle.sh
+# Run as root:  sudo bash setup_contabo.sh
 #
 set -euo pipefail
 
@@ -40,32 +40,32 @@ fi
 curl -fsSL -o "/tmp/$CLOUDFLARED_DEB" "https://github.com/cloudflare/cloudflared/releases/latest/download/$CLOUDFLARED_DEB"
 dpkg -i "/tmp/$CLOUDFLARED_DEB" || apt-get -f install -y
 
-log "Writing tunnel config (oracle.acronous.com: /search -> SearXNG :8888, /api/* -> backend :8000, else Ollama :11434)"
+log "Writing tunnel config (brain.acronous.com: /search -> SearXNG :8888, /api/* -> backend :8000, else Ollama :11434)"
 mkdir -p /etc/cloudflared
 cat > /etc/cloudflared/config.yml <<'EOF'
-tunnel: acronous-oracle
-credentials-file: /etc/cloudflared/acronous-oracle.json
+tunnel: acronous-contabo
+credentials-file: /etc/cloudflared/acronous-contabo.json
 ingress:
-  - hostname: oracle.acronous.com
+  - hostname: brain.acronous.com
     path: /search*
     service: http://localhost:8888
-  - hostname: oracle.acronous.com
+  - hostname: brain.acronous.com
     path: /api/*
     service: http://localhost:8000
-  - hostname: oracle.acronous.com
+  - hostname: brain.acronous.com
     service: http://localhost:11434
   - service: http_status:404
 no-autoupdate: true
 EOF
 
-cat > /etc/cloudflared/acronous-oracle.json <<'EOF'
+cat > /etc/cloudflared/acronous-contabo.json <<'EOF'
 {"AccountTag":"8cd98b62a6dfc48e53191ab641d580d6","TunnelID":"a4267766-bd18-4aa4-a51b-576bcfc33ccf","TunnelSecret":"NmMxNDFiYzMtM2YyNy00MzZkLTThkN2MtNjIxNzM5YzM4OGYh"}
 EOF
 
 log "Starting tunnel service"
-cat > /etc/systemd/system/cloudflared-oracle.service <<'EOF'
+cat > /etc/systemd/system/cloudflared-contabo.service <<'EOF'
 [Unit]
-Description=Cloudflare Tunnel (acronous-oracle)
+Description=Cloudflare Tunnel (acronous-contabo)
 After=network-online.target
 Wants=network-online.target
 
@@ -78,9 +78,9 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-sed -i "s|TOKENPLACEHOLDER|${TUNNEL_TOKEN}|" /etc/systemd/system/cloudflared-oracle.service
+sed -i "s|TOKENPLACEHOLDER|${TUNNEL_TOKEN}|" /etc/systemd/system/cloudflared-contabo.service
 systemctl daemon-reload
-systemctl enable --now cloudflared-oracle
+systemctl enable --now cloudflared-contabo
 
 # -------------------------------------------------- 3. Backend (optional)
 if [ "$DEPLOY_BACKEND" = "true" ]; then
@@ -97,16 +97,16 @@ if [ "$DEPLOY_BACKEND" = "true" ]; then
   fi
 
   cd "$REPO_DIR/backend"
-  [ -f .env ] || cp .env.oracle.example .env
+  [ -f .env ] || cp .env.contabo.example .env
 
   # Bind only to localhost so nothing is exposed except through the tunnel
-  sed -i 's/"8000:8000"/"127.0.0.1:8000:8000"/; s/"6379:6379"/"127.0.0.1:6379:6379"/' docker-compose.oracle.yml
+  sed -i 's/"8000:8000"/"127.0.0.1:8000:8000"/; s/"6379:6379"/"127.0.0.1:6379:6379"/' docker-compose.contabo.yml
 
-  docker compose -f docker-compose.oracle.yml up -d --build
+  docker compose -f docker-compose.contabo.yml up -d --build
   log "Backend building/running on http://localhost:8000"
 else
   echo ""
-  echo "Backend deploy skipped. To enable later:  DEPLOY_BACKEND=true sudo bash setup_oracle.sh"
+  echo "Backend deploy skipped. To enable later:  DEPLOY_BACKEND=true sudo bash setup_contabo.sh"
 fi
 
 # ------------------------------------------------- 4. SearXNG (search)
@@ -143,7 +143,7 @@ sed -i "s/REPLACE_ME/$(openssl rand -hex 32)/" /opt/searxng/settings.yml
 docker rm -f searxng 2>/dev/null || true
 docker run -d --name searxng --restart unless-stopped \
   -p 127.0.0.1:8888:8080 \
-  -e SEARXNG_BASE_URL=https://oracle.acronous.com/ \
+  -e SEARXNG_BASE_URL=https://brain.acronous.com/ \
   -v /opt/searxng/settings.yml:/etc/searxng/settings.yml:ro \
   searxng/searxng:latest
 
@@ -151,7 +151,7 @@ docker run -d --name searxng --restart unless-stopped \
 log "Verification"
 sleep 10
 echo "--- tunnel status ---"
-systemctl status cloudflared-oracle --no-pager | head -5 || true
+systemctl status cloudflared-contabo --no-pager | head -5 || true
 echo "--- ollama models ---"
 ollama list
 echo "--- local LLM check ---"
@@ -160,6 +160,6 @@ echo "--- SearXNG check ---"
 curl -fsS "http://localhost:8888/search?q=test&format=json" | jq '.results | length' || echo "(searxng not ready yet)"
 echo ""
 echo "DONE. Public endpoints:"
-echo "  LLM      https://oracle.acronous.com/v1/chat/completions"
-echo "  Search   https://oracle.acronous.com/search?q=test&format=json"
-echo "  Backend  https://oracle.acronous.com/api/v1/health  (when DEPLOY_BACKEND=true)"
+echo "  LLM      https://brain.acronous.com/v1/chat/completions"
+echo "  Search   https://brain.acronous.com/search?q=test&format=json"
+echo "  Backend  https://brain.acronous.com/api/v1/health  (when DEPLOY_BACKEND=true)"

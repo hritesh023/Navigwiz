@@ -19,9 +19,9 @@ Cloudflare Worker for the Acronous AI subdomain (ai.acronous.com)
 ## Environment Variables
 
 ```env
-ORACLE_LLM_URL: Self-hosted Ollama endpoint
-ORACLE_LLM_MODEL: Ollama model name
-ORACLE_LLM_KEY: Optional API key for the Ollama endpoint
+CONTABO_LLM_URL: Self-hosted Ollama endpoint
+CONTABO_LLM_MODEL: Ollama model name
+CONTABO_LLM_KEY: Optional API key for the Ollama endpoint
 SEARCH_ENABLED: Enable/disable web search (true/false)
 ```
 

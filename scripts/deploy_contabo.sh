@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Navigwiz + Acronous AI — Oracle Cloud Free Tier Deployment Script
-# Run this ONCE on a fresh Oracle Cloud Ubuntu 22.04/24.04 VM (4 ARM cores, 24 GB RAM, 200 GB disk)
-# curl -fsSL https://raw.githubusercontent.com/hritesh023/Navigwiz/main/scripts/deploy_oracle.sh | bash
+# Navigwiz + Acronous AI — Contabo Cloud VPS 8 Deployment Script
+# Run this ONCE on a fresh Contabo VPS Ubuntu 22.04/24.04 VM (4 ARM cores, 24 GB RAM, 200 GB disk)
+# curl -fsSL https://raw.githubusercontent.com/hritesh023/Navigwiz/main/scripts/deploy_contabo.sh | bash
 
 REPO_URL="https://github.com/hritesh023/Navigwiz.git"
 INSTALL_DIR="$HOME/navigwiz"
@@ -40,9 +40,9 @@ echo "  JWT_SECRET=<a-random-64-char-string>"
 echo "  SEARXNG_URL=https://searx.be/search"
 echo ""
 echo "EDIT THE .env FILE NOW, then run:"
-echo "  docker compose -f docker-compose.oracle.yml up -d"
+echo "  docker compose -f docker-compose.contabo.yml up -d"
 echo ""
-echo "After that, your brain runs 24/7 on Oracle Cloud."
+echo "After that, your brain runs 24/7 on Contabo VPS."
 echo ""
 
 exec "$SHELL"

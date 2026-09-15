@@ -7,13 +7,13 @@ binding = "AI"
 
 [vars]
 ENVIRONMENT = "production"
-ORACLE_LLM_URL = "https://oracle.acronous.com"
-ORACLE_LLM_MODEL = "qwen2.5:1.5b"
-ORACLE_LLM_KEY = ""
+CONTABO_LLM_URL = "https://brain.acronous.com"
+CONTABO_LLM_MODEL = "qwen2.5:1.5b"
+CONTABO_LLM_KEY = ""
 
 [env.production]
 ai = { binding = "AI" }
-vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", ORACLE_LLM_URL = "https://oracle.acronous.com", ORACLE_LLM_MODEL = "qwen2.5:1.5b", ORACLE_LLM_KEY = "" }
+vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://brain.acronous.com", CONTABO_LLM_MODEL = "qwen2.5:1.5b", CONTABO_LLM_KEY = "" }
 routes = [
   { pattern = "navigwiz-ai.acronous.com", custom_domain = true },
 ]

@@ -8,6 +8,7 @@ import '../providers/auth_provider.dart';
 import '../services/browser_service.dart';
 import '../services/theme_service.dart';
 import '../widgets/color_picker_dialog.dart';
+import 'pricing_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -121,6 +122,31 @@ class SettingsScreen extends StatelessWidget {
                       onTap: () => _confirmSignOut(context, sp),
                     ),
                   ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              const _SectionHeader(title: 'SUBSCRIPTION'),
+              Card(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                child: ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.workspace_premium_rounded,
+                        color: Theme.of(context).colorScheme.primary, size: 22),
+                  ),
+                  title: const Text('AI Plans & Billing'),
+                  subtitle: const Text('Browser free · AI Starter ₹99 · AI Plus ₹299 · Pro ₹699 · Ultra ₹1,499',
+                      style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PricingScreen()),
+                  ),
                 ),
               ),
               const SizedBox(height: 24),

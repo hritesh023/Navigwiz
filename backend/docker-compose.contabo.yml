@@ -1,6 +1,6 @@
 version: "3.9"
 
-# Optimized for Oracle Cloud Free Tier (4 ARM cores, 24 GB RAM)
+# Optimized for Contabo Cloud VPS 8 (4 ARM cores, 24 GB RAM)
 # Strips Nginx, combines worker into API, reduces concurrency
 
 services:

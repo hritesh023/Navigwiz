@@ -83,9 +83,9 @@ jobs:
         npx wrangler deploy --env production
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        ORACLE_LLM_URL: ${{ secrets.ORACLE_LLM_URL }}
-        ORACLE_LLM_MODEL: ${{ secrets.ORACLE_LLM_MODEL }}
-        ORACLE_LLM_KEY: ${{ secrets.ORACLE_LLM_KEY }}
+        CONTABO_LLM_URL: ${{ secrets.CONTABO_LLM_URL }}
+        CONTABO_LLM_MODEL: ${{ secrets.CONTABO_LLM_MODEL }}
+        CONTABO_LLM_KEY: ${{ secrets.CONTABO_LLM_KEY }}
         
     - name: Verify deployment
       run: |
