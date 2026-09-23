@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from app.config.settings import settings
 from app.api.routes import router as api_router
 from app.api.cf_routes import router as cf_router
+from app.api.billing import router as billing_router
 
 
 @asynccontextmanager
@@ -40,10 +41,15 @@ app = FastAPI(
 )
 
 
+# Browsers reject `Access-Control-Allow-Origin: *` combined with
+# `Access-Control-Allow-Credentials: true`. When the operator leaves the
+# wildcard in place we must disable credentials; explicit origin lists keep
+# credentials enabled (needed for cookie/JWT web flows).
+_CORS_WILDCARD = "*" in (settings.cors_origins or [])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=not _CORS_WILDCARD,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,6 +75,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 app.include_router(api_router)
 app.include_router(cf_router)
+app.include_router(billing_router)
 
 
 if __name__ == "__main__":

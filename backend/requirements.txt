@@ -57,6 +57,9 @@ apscheduler==3.11.0
 cloudinary==1.41.0
 boto3==1.36.10
 
+# Billing (Razorpay Standard Checkout — server-side order creation + HMAC verify)
+razorpay==2.0.1
+
 # Async
 aiofiles==24.1.0
 

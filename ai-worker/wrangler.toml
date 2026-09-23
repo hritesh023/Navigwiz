@@ -7,13 +7,17 @@ binding = "AI"
 
 [vars]
 ENVIRONMENT = "production"
-CONTABO_LLM_URL = "https://brain.acronous.com"
+CONTABO_LLM_URL = "https://ollama.acronous.com"
 CONTABO_LLM_MODEL = "qwen2.5:3b"
 CONTABO_LLM_KEY = ""
 
+# Keep Contabo brain + tunnel warm; scheduled() pings brain every 5 min.
+[triggers]
+crons = ["*/5 * * * *"]
+
 [env.production]
 ai = { binding = "AI" }
-vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://brain.acronous.com", CONTABO_LLM_MODEL = "qwen2.5:3b", CONTABO_LLM_KEY = "" }
+vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://ollama.acronous.com", CONTABO_LLM_MODEL = "qwen2.5:3b", CONTABO_LLM_KEY = "" }
 routes = [
   { pattern = "navigwiz-ai.acronous.com", custom_domain = true },
 ]

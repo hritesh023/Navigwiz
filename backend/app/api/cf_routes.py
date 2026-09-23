@@ -6,9 +6,16 @@ from app.config.settings import settings
 
 router = APIRouter()
 
-CONTABO_LLM_URL = os.getenv("CONTABO_LLM_URL", "https://brain.acronous.com")
-CONTABO_LLM_MODEL = os.getenv("CONTABO_LLM_MODEL", "qwen2.5:1.5b")
+CONTABO_LLM_URL = os.getenv("CONTABO_LLM_URL", "https://ollama.acronous.com")
+CONTABO_LLM_MODEL = os.getenv("CONTABO_LLM_MODEL", "qwen2.5:3b")
 CONTABO_LLM_KEY = os.getenv("CONTABO_LLM_KEY", "")
+
+CONTABO_FALLBACKS = [
+    CONTABO_LLM_URL,
+    "https://ollama.acronous.com",
+    "http://167.86.104.155:11434",
+    "https://brain.acronous.com",
+]
 
 
 async def _call_llm(messages: list, model: str = CONTABO_LLM_MODEL, stream: bool = False):
@@ -21,19 +28,38 @@ async def _call_llm(messages: list, model: str = CONTABO_LLM_MODEL, stream: bool
     if stream:
         body["stream"] = True
     import httpx
-    headers = {
-        "Authorization": f"Bearer {CONTABO_LLM_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            f"{CONTABO_LLM_URL}/v1/chat/completions",
-            json=body,
-            headers=headers,
-        )
-        if not resp.is_success:
-            raise HTTPException(502, f"LLM error: {resp.status_code}")
-        return resp.json()
+    headers = {"Content-Type": "application/json"}
+    # Empty Bearer headers break some upstreams — only send when a key exists.
+    if CONTABO_LLM_KEY:
+        headers["Authorization"] = f"Bearer {CONTABO_LLM_KEY}"
+    last_err = None
+    for base in dict.fromkeys([b.rstrip("/") for b in CONTABO_FALLBACKS if b]):
+        for path in ("/v1/chat/completions", "/api/chat"):
+            try:
+                payload = body if path.startswith("/v1/") else {
+                    "model": model,
+                    "messages": messages,
+                    "stream": False,
+                    "keep_alive": "24h",
+                    "options": {"num_ctx": 4096, "num_predict": 4096, "temperature": 0.7},
+                }
+                async with httpx.AsyncClient(timeout=45) as client:
+                    resp = await client.post(f"{base}{path}", json=payload, headers=headers)
+                if not resp.is_success:
+                    last_err = HTTPException(502, f"LLM error: {resp.status_code} @ {base}{path}")
+                    continue
+                data = resp.json()
+                if path.startswith("/v1/"):
+                    return data
+                # Normalize native Ollama shape to OpenAI-compat for callers.
+                content = (data.get("message") or {}).get("content", "")
+                return {"choices": [{"message": {"content": content}}]}
+            except Exception as e:
+                last_err = e
+                continue
+    if isinstance(last_err, HTTPException):
+        raise last_err
+    raise HTTPException(502, f"LLM unavailable: {last_err}")
 
 
 def _sanitize(text: str) -> str:

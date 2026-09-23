@@ -244,33 +244,40 @@ class AIService extends ChangeNotifier {
   }
 
   /// Single LLM call over caller-provided sources. No backend search runs.
+  /// Retried once: the LLM race (Workers AI + Contabo) can take 20-45s on
+  /// cold starts, so a transient timeout must not blank the AI Overview.
   Future<String> answerWithSources(
     String query,
     List<Map<String, String>> sources,
   ) async {
     if (!AppConfig.hasWorker) return '';
-    try {
-      final response = await http
-          .post(
-            Uri.parse('${AppConfig.workerUrl}/v1/answer'),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({
-              'query': query,
-              'sources': sources,
-              'session_id': 'navigwiz',
-            }),
-          )
-          .timeout(const Duration(seconds: 60));
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = json.decode(response.body);
-        final text = decoded['response']?.toString() ?? '';
-        if (text.isNotEmpty) return text;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(const Duration(milliseconds: 800));
       }
-      return '';
-    } catch (_) {
-      return '';
+      try {
+        final response = await http
+            .post(
+              Uri.parse('${AppConfig.workerUrl}/v1/answer'),
+              headers: {'Content-Type': 'application/json'},
+              body: json.encode({
+                'query': query,
+                'sources': sources,
+                'session_id': 'navigwiz',
+              }),
+            )
+            .timeout(const Duration(seconds: 60));
+
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          final decoded = json.decode(response.body);
+          final text = decoded['response']?.toString() ?? '';
+          if (text.isNotEmpty) return text;
+        }
+      } catch (_) {
+        continue;
+      }
     }
+    return '';
   }
 
   List<SearchResult> _cacheSearchResults(String cacheKey, List<SearchResult> results) {
@@ -343,29 +350,44 @@ class AIService extends ChangeNotifier {
   Future<List<SearchResult>> _searchViaWorker(String query, String category) async {
     if (!AppConfig.hasWorker) return [];
 
-    // Single fast attempt with a short timeout — the backend search path is
-    // now tightly budgeted (~2.5s), so a retry would just add serial latency.
-    try {
-      final uri = Uri.parse('${AppConfig.workerUrl}/search').replace(queryParameters: {
-        'q': query,
-        'category': category,
-      });
-      final response = await http.get(uri, headers: {'Accept': 'application/json'}).timeout(
-        const Duration(seconds: 5),
-      );
+    // Two attempts with backoff: the backend fan-out is budgeted (~2.8s) but
+    // cold edges/tunnels can spike once. A single retry turns transient
+    // timeouts into results instead of blank pages.
+    Object? lastError;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(const Duration(milliseconds: 600));
+      }
+      try {
+        final uri = Uri.parse('${AppConfig.workerUrl}/search').replace(queryParameters: {
+          'q': query,
+          'category': category,
+        });
+        final response = await http.get(uri, headers: {'Accept': 'application/json'}).timeout(
+          const Duration(seconds: 8),
+        );
 
-      if (response.statusCode != 200) return [];
+        if (response.statusCode != 200) {
+          lastError = 'HTTP ${response.statusCode}';
+          continue;
+        }
 
-      final decoded = json.decode(response.body);
-      if (decoded is! Map<String, dynamic>) return [];
+        final decoded = json.decode(response.body);
+        if (decoded is! Map<String, dynamic>) continue;
 
-      final rawResults = decoded['results'];
-      if (rawResults is! List || rawResults.isEmpty) return [];
+        final rawResults = decoded['results'];
+        if (rawResults is! List || rawResults.isEmpty) continue;
 
-      return _parseWorkerResults(rawResults);
-    } catch (_) {
-      return [];
+        final parsed = _parseWorkerResults(rawResults);
+        if (parsed.isNotEmpty) return parsed;
+      } catch (e) {
+        lastError = e;
+      }
     }
+    if (lastError != null) {
+      await _logger.warning('search failed after retry: $lastError');
+    }
+    return [];
   }
 
   List<SearchResult> _parseWorkerResults(List rawResults) {
@@ -461,35 +483,48 @@ class AIService extends ChangeNotifier {
       );
     }
 
-    try {
-      final response = await http
-          .post(
-            Uri.parse('${AppConfig.workerUrl}/v1/chat'),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({
-              'message': message,
-              if (mode != null) 'mode': mode,
-              'session_id': sessionId ?? 'navigwiz',
-            }),
-          )
-          .timeout(_agentTimeout);
+    // Retry transport failures once (cold tunnel/edge). App-level error
+    // responses (non-2xx with a body) are returned immediately.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(const Duration(milliseconds: 800));
+      }
+      try {
+        final response = await http
+            .post(
+              Uri.parse('${AppConfig.workerUrl}/v1/chat'),
+              headers: {'Content-Type': 'application/json'},
+              body: json.encode({
+                'message': message,
+                if (mode != null) 'mode': mode,
+                'session_id': sessionId ?? 'navigwiz',
+              }),
+            )
+            .timeout(_agentTimeout);
 
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = json.decode(response.body);
-        if (decoded is Map<String, dynamic>) {
-          return AgentResponse.fromJson(decoded);
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          final decoded = json.decode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            return AgentResponse.fromJson(decoded);
+          }
+        }
+        return AgentResponse(
+          response: 'The AI service returned an error (${response.statusCode}). Please try again.',
+          isSimple: true,
+        );
+      } catch (_) {
+        if (attempt == 1) {
+          return const AgentResponse(
+            response: 'Could not reach the AI service. Please check your connection and try again.',
+            isSimple: true,
+          );
         }
       }
-      return AgentResponse(
-        response: 'The AI service returned an error (${response.statusCode}). Please try again.',
-        isSimple: true,
-      );
-    } catch (e) {
-      return const AgentResponse(
-        response: 'Could not reach the AI service. Please check your connection and try again.',
-        isSimple: true,
-      );
     }
+    return const AgentResponse(
+      response: 'Could not reach the AI service. Please check your connection and try again.',
+      isSimple: true,
+    );
   }
 
   Future<AgentResponse> runResearchAgent(String query) async {

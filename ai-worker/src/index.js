@@ -11,8 +11,33 @@
 // General web answers come from these plus the LLM's knowledge, with a tight
 // total budget (~2.5s) so search never stalls the response.
 const ALLOWED_ORIGINS = '*';
-const DEFAULT_CONTABO_URL = 'https://brain.acronous.com';
+// Primary is the direct Ollama tunnel (OpenAI-compat + native API). The old
+// default https://brain.acronous.com pointed at image-service :7860 (tunnel
+// misroute) so /v1/chat/completions 404'd → zero responses.
+const DEFAULT_CONTABO_URL = 'https://ollama.acronous.com';
+// Fallback chain: configured URL → Ollama tunnel → direct IP → brain nginx.
+const CONTABO_FALLBACK_URLS = [
+  'https://ollama.acronous.com',
+  'http://167.86.104.155:11434',
+  'https://brain.acronous.com',
+  'http://167.86.104.155:8000',
+];
 const DEFAULT_CONTABO_MODEL = 'qwen2.5:14b';
+
+function resolveContaboBases(env) {
+  const out = [];
+  const seen = new Set();
+  const push = (u) => {
+    const v = String(u || '').trim().replace(/\/$/, '');
+    if (!v || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  };
+  push(env.CONTABO_LLM_URL);
+  push(DEFAULT_CONTABO_URL);
+  for (const u of CONTABO_FALLBACK_URLS) push(u);
+  return out;
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': ALLOWED_ORIGINS,
@@ -192,11 +217,8 @@ async function callWorkersAI(env, messages, maxTokens, temperature, jsonMode, ta
 }
 
 async function callContabo(env, messages, maxTokens, temperature, jsonMode, model) {
-  const contaboUrl = env.CONTABO_LLM_URL || DEFAULT_CONTABO_URL;
   const contaboKey = env.CONTABO_LLM_KEY || '';
-  const contaboModel = model || env.CONTABO_LLM_MODEL || 'qwen2.5:1.5b';
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  const contaboModel = model || env.CONTABO_LLM_MODEL || 'qwen2.5:3b';
   const headers = { 'Content-Type': 'application/json' };
   if (contaboKey) headers['Authorization'] = `Bearer ${contaboKey}`;
   const body = {
@@ -207,24 +229,60 @@ async function callContabo(env, messages, maxTokens, temperature, jsonMode, mode
     max_tokens: Math.min(maxTokens, 4096),
   };
   if (jsonMode) body.response_format = { type: 'json_object' };
-  try {
-    const resp = await fetch(`${contaboUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!resp.ok) return { ok: false };
-    const data = await resp.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    if (content.trim()) return { ok: true, content, provider: 'contabo', model: contaboModel };
-    return { ok: false };
-  } catch (e) {
-    clearTimeout(timeoutId);
-    console.error('Contabo LLM unavailable:', e.message);
-    return { ok: false };
+  // Try each brain base in order (configured → Ollama tunnel → direct IP →
+  // brain nginx). Per base we try OpenAI-compat /v1/chat/completions first,
+  // then native Ollama /api/chat, accepting both response shapes — so a path
+  // mismatch or tunnel misroute never yields "zero response".
+  for (const contaboUrl of resolveContaboBases(env)) {
+    // 1) OpenAI-compat shape (Ollama /v1/chat/completions, api-server /v1/*)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    try {
+      const resp = await fetch(`${contaboUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        const content = data.choices?.[0]?.message?.content || data.response || '';
+        if (content && content.trim()) return { ok: true, content, provider: 'contabo', model: contaboModel };
+      }
+    } catch (e) {
+      clearTimeout(timeoutId);
+      console.error('Contabo LLM unavailable:', contaboUrl, e.message);
+    }
+    // 2) Native Ollama shape (/api/chat) — same model/messages, stream off.
+    const controller2 = new AbortController();
+    const timeoutId2 = setTimeout(() => controller2.abort(), 30000);
+    try {
+      const nativeBody = {
+        model: contaboModel,
+        messages,
+        stream: false,
+        keep_alive: '24h',
+        options: { num_ctx: 4096, num_predict: Math.min(maxTokens, 4096), temperature },
+      };
+      const resp2 = await fetch(`${contaboUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nativeBody),
+        signal: controller2.signal,
+      });
+      clearTimeout(timeoutId2);
+      if (resp2.ok) {
+        const data2 = await resp2.json().catch(() => ({}));
+        const content2 = data2?.message?.content || '';
+        if (content2 && content2.trim()) return { ok: true, content: content2, provider: 'contabo-native', model: contaboModel };
+      }
+    } catch (e) {
+      clearTimeout(timeoutId2);
+      continue;
+    }
   }
+  return { ok: false };
 }
 
 async function callLLM({
@@ -593,6 +651,72 @@ async function searchSearxng(query, category, maxResults) {
   return null;
 }
 
+// DuckDuckGo Instant Answer: keyless JSON, excellent for general queries
+// ("best phone", "weather", definitions). Never scraped — official API.
+async function ddgInstantSearch(query, maxResults = 5) {
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+      { headers: { Accept: 'application/json', 'User-Agent': 'Navigwiz/1.0.0' } },
+      2500
+    );
+    if (!response.ok) return [];
+    const data = await response.json().catch(() => ({}));
+    const out = [];
+    if (data.AbstractText && data.AbstractURL) {
+      out.push({
+        title: data.Heading || query,
+        url: data.AbstractURL,
+        snippet: (data.AbstractText || '').slice(0, 300),
+        img_src: null,
+        publishedDate: null,
+      });
+    }
+    for (const t of (data.RelatedTopics || []).slice(0, maxResults)) {
+      if (out.length >= maxResults) break;
+      const item = t.Text && t.FirstURL ? t : (t.Topics && t.Topics[0]) || null;
+      if (item && item.Text && item.FirstURL && validResultUrl(item.FirstURL)) {
+        const sep = item.Text.indexOf(' - ');
+        out.push({
+          title: (sep > 0 ? item.Text.slice(0, sep) : item.Text).slice(0, 120),
+          url: item.FirstURL,
+          snippet: (sep > 0 ? item.Text.slice(sep + 3) : item.Text).slice(0, 250),
+          img_src: null,
+          publishedDate: null,
+        });
+      }
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+// Wikipedia OpenSearch: instant title suggestions, catches what full-text
+// search misses (short queries, partial names, typos).
+async function wikipediaOpenSearch(query, maxResults = 5) {
+  try {
+    const response = await fetchWithTimeout(
+      `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=${maxResults}&namespace=0&format=json&origin=*`,
+      { headers: { 'User-Agent': 'Navigwiz/1.0.0' } },
+      2500
+    );
+    if (!response.ok) return [];
+    const data = await response.json().catch(() => null);
+    if (!Array.isArray(data) || data.length < 4) return [];
+    const [, titles, descs, urls] = data;
+    return (titles || []).slice(0, maxResults).map((t, i) => ({
+      title: t || '',
+      url: (urls && urls[i]) || `https://en.wikipedia.org/wiki/${encodeURIComponent(String(t || '').replace(/ /g, '_'))}`,
+      snippet: ((descs && descs[i]) || '').slice(0, 250),
+      img_src: null,
+      publishedDate: null,
+    })).filter((r) => r.title && validResultUrl(r.url));
+  } catch (_) {
+    return [];
+  }
+}
+
 async function mojeekSearch(query, maxResults = 10) {
   // Removed: HTML scraping was slow and frequently blocked. Brave API +
   // Wikipedia (see searchFromWeb) cover this path with a tight time budget.
@@ -616,20 +740,23 @@ function wantsCodeResults(query) {
 }
 function orderMerged(parts, query) {
   if (wantsFreshResults(query)) {
-    return [...parts.gdelt, ...parts.hn, ...parts.wiki, ...parts.arxiv, ...parts.ol];
+    return [...parts.gdelt, ...parts.hn, ...parts.ddg, ...parts.wiki, ...parts.wikiOpen, ...parts.arxiv, ...parts.ol];
   }
   if (wantsCodeResults(query)) {
-    return [...parts.hn, ...parts.gdelt, ...parts.wiki, ...parts.arxiv, ...parts.ol];
+    return [...parts.hn, ...parts.gdelt, ...parts.ddg, ...parts.wiki, ...parts.wikiOpen, ...parts.arxiv, ...parts.ol];
   }
-  return [...parts.wiki, ...parts.hn, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
+  return [...parts.wiki, ...parts.wikiOpen, ...parts.ddg, ...parts.hn, ...parts.gdelt, ...parts.arxiv, ...parts.ol];
 }
 
 // Fast general search: all free keyless JSON APIs in parallel with a tight
 // total budget (~2.5s). No paid APIs, no keys, no rate-limited sources,
-// no DuckDuckGo / SearXNG / HTML scraping.
+// no HTML scraping. DDG Instant + Wikipedia OpenSearch guarantee general
+// queries ("best phone", short names) return something.
 async function searchFromWeb(query, maxResults = 10) {
-  const [wiki, hn, gdelt, arxiv, ol] = await Promise.all([
+  const [wiki, wikiOpen, ddg, hn, gdelt, arxiv, ol] = await Promise.all([
     withTimeout(wikipediaSearch(query, Math.min(maxResults, 5)), 2500).catch(() => []),
+    withTimeout(wikipediaOpenSearch(query, 5), 2500).catch(() => []),
+    withTimeout(ddgInstantSearch(query, 5), 2500).catch(() => []),
     withTimeout(hnSearch(query, Math.min(maxResults, 6)), 2500).catch(() => []),
     withTimeout(gdeltSearch(query, Math.min(maxResults, 6)), 2800).catch(() => []),
     withTimeout(arxivSearch(query, 3), 2800).catch(() => []),
@@ -645,6 +772,8 @@ async function searchFromWeb(query, maxResults = 10) {
     }));
   const parts = {
     wiki: toMerged(wiki),
+    wikiOpen: toMerged(wikiOpen),
+    ddg: toMerged(ddg),
     hn: toMerged(hn),
     gdelt: toMerged(gdelt),
     arxiv: toMerged(arxiv),
@@ -1170,24 +1299,31 @@ async function handleAnswer(request, env) {
 
 async function handleSearch(request, env, ctx) {
   const url = new URL(request.url);
-  const query = url.searchParams.get('q');
+  const query = (url.searchParams.get('q') || '').trim();
   if (!query) return respondError('Missing query parameter', 400);
   const category = url.searchParams.get('category') || 'all';
 
-  // Edge cache: identical searches within 5 minutes return instantly without
-  // touching any search engine. Applies to every page (search, research,
-  // projects, build, workspace) since they all hit /search.
+  // Edge cache: identical searches within 5 minutes return instantly — but
+  // NEVER serve or store an empty result. One failed fan-out used to poison
+  // repeats for 5 min (results=[] cached). Now: cache hit with 0 results is
+  // ignored and re-fetched live.
   try {
     const cache = caches.default;
     const cacheKey = new Request(url.toString(), { method: 'GET' });
     const cached = await cache.match(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      try {
+        const c = await cached.clone().json();
+        if (c && Array.isArray(c.results) && c.results.length > 0) return cached;
+      } catch { return cached; }
+    }
   } catch (_) {}
 
-  // Fast path only: free keyless JSON APIs in parallel, ~2.5s budget.
-  // No paid APIs, no keys, no rate-limited sources, no HTML scraping.
-  const [wiki, hn, gdelt, arxiv, ol] = await Promise.all([
+  // Fast path: free keyless JSON APIs in parallel, ~2.8s budget.
+  const [wiki, wikiOpen, ddg, hn, gdelt, arxiv, ol] = await Promise.all([
     withTimeout(wikipediaSearch(query, category === 'images' ? 4 : 8), 2500).catch(() => []),
+    withTimeout(wikipediaOpenSearch(query, 5), 2500).catch(() => []),
+    withTimeout(ddgInstantSearch(query, 5), 2500).catch(() => []),
     withTimeout(hnSearch(query, 8), 2500).catch(() => []),
     withTimeout(gdeltSearch(query, 10), 2800).catch(() => []),
     withTimeout(arxivSearch(query, 5), 2800).catch(() => []),
@@ -1205,6 +1341,8 @@ async function handleSearch(request, env, ctx) {
   let merged = orderMerged(
     {
       wiki: toMerged(wiki),
+      wikiOpen: toMerged(wikiOpen),
+      ddg: toMerged(ddg),
       hn: toMerged(hn),
       gdelt: toMerged(gdelt),
       arxiv: toMerged(arxiv),
@@ -1220,26 +1358,58 @@ async function handleSearch(request, env, ctx) {
 
   merged = cleanSearchResults(dedupeByUrl(merged)).slice(0, 50);
 
+  // Guarantee: never return a bare empty page. If every source missed,
+  // synthesize navigational fallbacks so the UI always has something to
+  // render (Wikipedia search + DDG search links for the exact query).
+  if (merged.length === 0 && category !== 'images') {
+    merged = [
+      {
+        title: `${query} — Wikipedia`,
+        url: `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(query)}`,
+        content: `No direct matches found. See Wikipedia results for "${query}".`,
+        img_src: null,
+        publishedDate: null,
+      },
+      {
+        title: `${query} — DuckDuckGo`,
+        url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
+        content: `See web results for "${query}" on DuckDuckGo.`,
+        img_src: null,
+        publishedDate: null,
+      },
+    ];
+  }
+
   // Lightweight suggestions derived from result titles (no extra network).
   const suggestions = [];
   for (const r of merged) {
     if (suggestions.length >= 3) break;
     const t = (r.title || '').trim();
-    if (t && t.toLowerCase() !== query.trim().toLowerCase()) suggestions.push(t);
+    if (t && t.toLowerCase() !== query.toLowerCase()) suggestions.push(t);
+  }
+  if (suggestions.length === 0) {
+    suggestions.push(`Tell me more about ${query}`, `What are the pros and cons of ${query}?`);
   }
 
+  const isFallback = merged.length === 2 && merged[0].url.includes('w/index.php?search=');
   const response = respondJson({
     results: merged,
     suggestions,
     infoboxes: [],
     answers: [],
     number_of_results: merged.length,
+    fallback: isFallback,
   });
-  response.headers.set('Cache-Control', 'public, max-age=300');
+  // Fallback navigational cards are per-query but low-value: cache briefly.
+  // Real results cache 5 min. Empty is NEVER cached (handled above).
+  response.headers.set('Cache-Control', isFallback ? 'public, max-age=60' : 'public, max-age=300');
 
-  // Store in edge cache for instant repeat searches.
+  // Store in edge cache for instant repeat searches (non-empty only).
   try {
-    if (ctx && ctx.waitUntil) {
+    if (ctx && ctx.waitUntil && merged.length > 0 && !isFallback) {
+      const cacheKey = new Request(url.toString(), { method: 'GET' });
+      ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+    } else if (ctx && ctx.waitUntil && isFallback) {
       const cacheKey = new Request(url.toString(), { method: 'GET' });
       ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
     }
@@ -1400,9 +1570,68 @@ async function handleRequest(request, env, ctx) {
       if (request.method !== 'GET') return respondError('Method not allowed', 405);
       return handleImageProxy(request);
 
+    case '/v1/wakeup':
+      if (request.method === 'GET') {
+        // Touch the Contabo brain so Ollama stays loaded (keep_alive=24h).
+        // Best-effort across fallback bases; never fails the caller.
+        let warmed = false;
+        for (const b of resolveContaboBases(env).slice(0, 2)) {
+          try {
+            const r = await fetchWithTimeout(`${b}/v1/brain/info`, {}, 5000);
+            if (r.ok) { warmed = true; break; }
+          } catch {}
+          try {
+            const r2 = await fetchWithTimeout(`${b}/api/tags`, {}, 5000);
+            if (r2.ok) { warmed = true; break; }
+          } catch {}
+        }
+        return respondJson({ status: warmed ? 'ok' : 'degraded', warmed, timestamp: Date.now() });
+      }
+      return respondError('Method not allowed', 405);
+
     case '/health':
       if (request.method === 'GET') {
-        return respondJson({ status: 'ok', timestamp: Date.now() });
+        // Honest health: probe search (Wikipedia) + brain. The app uses this
+        // to decide whether to show offline state instead of blank results.
+        let search = 'unknown';
+        let brain = 'unknown';
+        // Same Wikipedia query API the real search path uses (opensearch is
+        // only a supplement — probing it alone gave false "down" readings).
+        try {
+          // Wikimedia rejects requests without a User-Agent — send the same
+          // one the real search path uses, or this probe false-negatives.
+          const r = await fetchWithTimeout(
+            `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=test&srlimit=1&format=json&origin=*`,
+            { headers: { 'User-Agent': 'Navigwiz/1.0.0' } }, 5000
+          );
+          search = r.ok ? 'up' : 'down';
+        } catch { search = 'down'; }
+        // Either the FastAPI brain (/v1/brain/info) or raw Ollama (/api/tags)
+        // counts — bases include both shapes (tunnel + direct IP).
+        for (const b of resolveContaboBases(env).slice(0, 3)) {
+          let up = false;
+          try {
+            const r = await fetchWithTimeout(`${b}/v1/brain/info`, {}, 4000);
+            if (r.ok) up = true;
+          } catch {}
+          if (!up) {
+            try {
+              const r2 = await fetchWithTimeout(`${b}/api/tags`, {}, 4000);
+              if (r2.ok) up = true;
+            } catch {}
+          }
+          if (up) { brain = 'up'; break; }
+          brain = 'down';
+        }
+        const hasAI = !!(env && env.AI && typeof env.AI.run === 'function');
+        const status = search === 'up' && (brain === 'up' || hasAI) ? 'ok' : 'degraded';
+        return respondJson({
+          status,
+          search,
+          brain,
+          workers_ai: hasAI ? 'up' : 'down',
+          timestamp: Date.now(),
+        }, status === 'ok' ? 200 : 503);
       }
       return respondError('Method not allowed', 405);
 
@@ -1411,6 +1640,26 @@ async function handleRequest(request, env, ctx) {
   }
 }
 
+async function handleScheduled(env) {
+  // Cron keep-alive: ping brain + one cheap search source so the tunnel,
+  // Ollama model, and edge cache stay warm. Never throws.
+  for (const b of resolveContaboBases(env).slice(0, 2)) {
+    try {
+      const r = await fetchWithTimeout(`${b}/v1/brain/info`, {}, 6000);
+      if (r.ok) break;
+    } catch {}
+  }
+  try {
+    await fetchWithTimeout(
+      `https://en.wikipedia.org/w/api.php?action=opensearch&search=technology&limit=1&namespace=0&format=json&origin=*`,
+      {}, 5000
+    );
+  } catch {}
+}
+
 export default {
   fetch: handleRequest,
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(handleScheduled(env));
+  },
 };

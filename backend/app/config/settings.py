@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = None
     prometheus_port: int = 9090
 
+    # Razorpay Standard Checkout (server-side ONLY — the secret must never
+    # reach clients; the app receives only key_id + order_id per order).
+    razorpay_key_id: Optional[str] = None
+    razorpay_key_secret: Optional[str] = None
+    razorpay_currency: str = "INR"
+
     cors_origins: list[str] = ["*"]
     max_upload_size_mb: int = 100
     rate_limit_per_minute: int = 60
