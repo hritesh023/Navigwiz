@@ -348,10 +348,13 @@ class _AddressBarState extends State<AddressBar> {
   }
 
   Widget _buildIncognitoBadge() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final badgeColor =
+        isDark ? const Color(0xFF37474F) : const Color(0xFF1E40AF);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF37474F),
+        color: badgeColor,
         borderRadius: BorderRadius.circular(12),
       ),
       child: const Row(

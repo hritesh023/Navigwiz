@@ -456,30 +456,38 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   Widget _buildPrivateModeNotice() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const infoBlue = Color(0xFF1E40AF);
+    const infoBlueDark = Color(0xFF1E3A8A);
     return Container(
       constraints: const BoxConstraints(maxWidth: 480),
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFF37474F).withValues(alpha: 0.9),
+        color: isDark
+            ? const Color(0xFF37474F).withValues(alpha: 0.9)
+            : const Color(0xFFDBEAFE),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.12),
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.12)
+              : infoBlue.withValues(alpha: 0.25),
         ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.visibility_off, color: Colors.white, size: 20),
+          Icon(Icons.visibility_off,
+              color: isDark ? Colors.white : infoBlue, size: 20),
           const SizedBox(width: 12),
           Flexible(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
+                Text(
                   "You've gone incognito",
                   style: TextStyle(
-                    color: Colors.white,
+                    color: isDark ? Colors.white : infoBlueDark,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
@@ -488,7 +496,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 Text(
                   'Tabs, history, cookies and site data from this window are not saved.',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.85),
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.85)
+                        : infoBlue,
                     fontSize: 12,
                   ),
                 ),
@@ -737,8 +747,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
     required VoidCallback onTap,
   }) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final tint = isActive
-        ? const Color(0xFF37474F)
+        ? (isDark ? const Color(0xFF37474F) : const Color(0xFF1E40AF))
         : theme.colorScheme.surfaceContainer;
     final fg = isActive
         ? Colors.white

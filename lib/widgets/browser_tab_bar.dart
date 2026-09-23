@@ -23,11 +23,14 @@ class BrowserTabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final privateStripColor =
+        isDark ? const Color(0xFF263238) : const Color(0xFFD6E7FD);
     return Container(
       height: 36,
       decoration: BoxDecoration(
         color: isPrivate
-            ? const Color(0xFF263238)
+            ? privateStripColor
             : Theme.of(context).colorScheme.surface,
         border: Border(
           bottom: BorderSide(
@@ -72,18 +75,22 @@ class _NewTabButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const privateBlue = Color(0xFF1E40AF);
     return Container(
       width: 34,
       height: 32,
       margin: const EdgeInsets.only(left: 4, top: 2),
       decoration: BoxDecoration(
         color: isPrivate
-            ? const Color(0xFF37474F)
+            ? (isDark ? const Color(0xFF37474F) : const Color(0xFFBFDBFE))
             : Theme.of(context).colorScheme.surfaceContainer,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isPrivate
-              ? Colors.white.withValues(alpha: 0.15)
+              ? (isDark
+                  ? Colors.white.withValues(alpha: 0.15)
+                  : privateBlue.withValues(alpha: 0.3))
               : Theme.of(context).dividerColor.withValues(alpha: 0.42),
           width: 0.5,
         ),
@@ -94,7 +101,7 @@ class _NewTabButton extends StatelessWidget {
           Icons.add,
           size: 17,
           color: isPrivate
-              ? Colors.white.withValues(alpha: 0.9)
+              ? (isDark ? Colors.white.withValues(alpha: 0.9) : privateBlue)
               : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
         padding: EdgeInsets.zero,
@@ -121,6 +128,18 @@ class _TabItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const privateBlue = Color(0xFF1E40AF);
+    const privateBlueDark = Color(0xFF1E3A8A);
+    final privateActiveFill =
+        isDark ? const Color(0xFF455A64) : const Color(0xFFBFDBFE);
+    final privateIdleFill =
+        isDark ? const Color(0xFF263238) : const Color(0xFFD6E7FD);
+    final privateTitle =
+        isDark ? Colors.white : privateBlueDark;
+    final privateTitleDim = isDark
+        ? Colors.white.withValues(alpha: 0.7)
+        : privateBlue.withValues(alpha: 0.75);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -131,9 +150,9 @@ class _TabItem extends StatelessWidget {
         height: 32,
         decoration: BoxDecoration(
           color: isActive
-              ? (isPrivate ? const Color(0xFF455A64) : Theme.of(context).colorScheme.surface)
+              ? (isPrivate ? privateActiveFill : Theme.of(context).colorScheme.surface)
               : (isPrivate
-                  ? const Color(0xFF263238)
+                  ? privateIdleFill
                   : Theme.of(context).colorScheme.surfaceContainer),
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(8),
@@ -142,7 +161,9 @@ class _TabItem extends StatelessWidget {
           border: Border.all(
             color: isActive
                 ? (isPrivate
-                    ? Colors.white.withValues(alpha: 0.2)
+                    ? (isDark
+                        ? Colors.white.withValues(alpha: 0.2)
+                        : privateBlue.withValues(alpha: 0.35))
                     : Theme.of(context).dividerColor.withValues(alpha: 0.8))
                 : Theme.of(context).dividerColor.withValues(alpha: 0.3),
             width: isActive ? 1 : 0.5,
@@ -166,9 +187,11 @@ class _TabItem extends StatelessWidget {
               width: 16,
               height: 16,
               child: isPrivate
-                  ? const Icon(Icons.visibility_off,
+                  ? Icon(Icons.visibility_off,
                       size: 14,
-                      color: Color(0xFF90A4AE))
+                      color: isDark
+                          ? const Color(0xFF90A4AE)
+                          : const Color(0xFF1D4ED8))
                   : tab.url.isEmpty || tab.url == 'about:blank'
                       ? const SaturnLogo(size: 14)
                       : DomainHelper.getFaviconForUrl(
@@ -188,10 +211,10 @@ class _TabItem extends StatelessWidget {
                   fontSize: 12,
                   color: isActive
                       ? (isPrivate
-                          ? Colors.white
+                          ? privateTitle
                           : Theme.of(context).colorScheme.onSurface)
                       : (isPrivate
-                          ? Colors.white.withValues(alpha: 0.7)
+                          ? privateTitleDim
                           : Theme.of(context).colorScheme.onSurfaceVariant),
                   fontWeight: isActive ? FontWeight.w500 : FontWeight.w400,
                   letterSpacing: 0,
@@ -223,6 +246,10 @@ class _TabItem extends StatelessWidget {
   }
 
   Widget _buildCloseButton(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final privateClose = isDark
+        ? Colors.white.withValues(alpha: 0.7)
+        : const Color(0xFF1E40AF).withValues(alpha: 0.75);
     return Padding(
       padding: const EdgeInsets.only(right: 4),
       child: SizedBox(
@@ -234,7 +261,7 @@ class _TabItem extends StatelessWidget {
             Icons.close,
             size: 12,
             color: isPrivate
-                ? Colors.white.withValues(alpha: 0.7)
+                ? privateClose
                 : isActive
                     ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)
                     : Theme.of(context).colorScheme.onSurfaceVariant,
