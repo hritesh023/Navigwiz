@@ -8,6 +8,7 @@ import '../providers/auth_provider.dart';
 import '../services/browser_service.dart';
 import '../services/theme_service.dart';
 import '../widgets/color_picker_dialog.dart';
+import 'history_screen.dart';
 import 'pricing_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -280,14 +281,23 @@ class SettingsScreen extends StatelessWidget {
                         child: Icon(Icons.history,
                             color: Theme.of(context).colorScheme.primary, size: 22),
                       ),
-                      title: const Text('Clear History'),
-                      subtitle: const Text('Remove all browsing history',
-                          style: TextStyle(fontSize: 12)),
-                      onTap: () => _confirmClearData(
-                          context, 'history', 'Clear all browsing history?', () {
-                        Provider.of<BrowserService>(context, listen: false)
-                            .clearHistory();
-                      }),
+                      title: const Text('Browsing History'),
+                      subtitle: Consumer<BrowserService>(
+                        builder: (context, browser, _) {
+                          final count = browser.historyEntries.length;
+                          return Text(
+                            count == 0
+                                ? 'View, search and delete history'
+                                : 'View, search and delete · $count ${count == 1 ? 'item' : 'items'}',
+                            style: const TextStyle(fontSize: 12),
+                          );
+                        },
+                      ),
+                      trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const HistoryScreen()),
+                      ),
                     ),
                     Divider(height: 1, indent: 72, color: Theme.of(context).dividerColor),
                     ListTile(

@@ -8,12 +8,14 @@ CLOUD_PROVIDERS = {
     # ── Acronous LLM brain — Contabo Cloud VPS 8 (EU, 167.86.104.155) ──
     # in-docker: http://ollama:11434/v1 | direct: http://167.86.104.155:11434/v1
     # tunnel: https://brain.acronous.com/v1 — override via ACRONOUS_LLM_API_URL.
-    # Base model: Qwen3 8B (latest smart open-source that fits CPU VPS).
+    # Base model: qwen2.5:3b — fastest reliable chat model on the Contabo CPU
+    # box (~5.7 tok/s). qwen3:8b (~2.35 tok/s) caused 90s-timeout 500s, so it
+    # is fallback-only, never the default.
     "contabo": {
         "base_url": "http://ollama:11434/v1",
-        "models": ["qwen3:8b", "qwen2.5-coder:7b", "qwen2.5:7b", "qwen2.5:3b", "qwen2.5:1.5b", "qwen3:4b", "qwen2.5vl:7b", "llava:7b", "llama3.1"],
-        "default_model": "qwen3:8b",
-        "chat_model": "qwen3:8b",
+        "models": ["qwen2.5:3b", "qwen2.5-coder:7b", "qwen2.5:7b", "qwen3:8b", "qwen2.5:1.5b", "qwen3:4b", "qwen2.5vl:7b", "llava:7b", "llama3.1"],
+        "default_model": "qwen2.5:3b",
+        "chat_model": "qwen2.5:3b",
         "code_model": "qwen2.5-coder:7b",
         "fast_model": "qwen2.5:3b",
         "vision_model": "qwen2.5vl:7b",

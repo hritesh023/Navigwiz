@@ -26,8 +26,10 @@ class BrowserTabBar extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final privateStripColor =
         isDark ? const Color(0xFF263238) : const Color(0xFFD6E7FD);
+    // Taller strip on phones for comfortable touch targets.
+    final isNarrow = MediaQuery.of(context).size.width < 600;
     return Container(
-      height: 36,
+      height: isNarrow ? 44 : 36,
       decoration: BoxDecoration(
         color: isPrivate
             ? privateStripColor
@@ -143,11 +145,11 @@ class _TabItem extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        constraints: const BoxConstraints(
-          minWidth: 120,
+        constraints: BoxConstraints(
+          minWidth: MediaQuery.of(context).size.width < 600 ? 140 : 120,
           maxWidth: 240,
         ),
-        height: 32,
+        height: MediaQuery.of(context).size.width < 600 ? 38 : 32,
         decoration: BoxDecoration(
           color: isActive
               ? (isPrivate ? privateActiveFill : Theme.of(context).colorScheme.surface)
@@ -253,13 +255,13 @@ class _TabItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(right: 4),
       child: SizedBox(
-        width: 24,
-        height: 24,
+        width: 32,
+        height: 32,
         child: IconButton(
           onPressed: onClose,
           icon: Icon(
             Icons.close,
-            size: 12,
+            size: 14,
             color: isPrivate
                 ? privateClose
                 : isActive

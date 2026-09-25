@@ -3,16 +3,21 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
 import '../models/browser_tab.dart';
+import '../models/history_entry.dart';
 import '../utils/domain_helper.dart';
 
 class BrowserService extends ChangeNotifier {
+  static const int maxHistoryEntries = 500;
+  static const String _historyV2Key = 'history_v2';
+  static const String _legacyHistoryKey = 'history';
   final List<BrowserTab> _tabs = [];
   int _activeTabIndex = 0;
   int _reloadNonce = 0;
   WebViewController? _webViewController;
   List<String> _bookmarks = [];
-  List<String> _history = [];
+  final List<HistoryEntry> _historyEntries = [];
   bool _privateMode = false;
   String _searchEngine = 'navigwiz';
   String _homepageUrl = '';
@@ -27,7 +32,11 @@ class BrowserService extends ChangeNotifier {
   BrowserTab? get activeTab => _tabs.isNotEmpty ? _tabs[_activeTabIndex] : null;
   WebViewController? get webViewController => _webViewController;
   List<String> get bookmarks => List.unmodifiable(_bookmarks);
-  List<String> get history => List.unmodifiable(_history);
+  /// Newest-first browsing history with titles + timestamps.
+  List<HistoryEntry> get historyEntries => List.unmodifiable(_historyEntries);
+  /// Legacy accessor (URLs only, newest-first). Kept for compatibility.
+  List<String> get history =>
+      List.unmodifiable(_historyEntries.map((e) => e.url));
   String get currentUrl => activeTab?.url ?? '';
   bool get isPrivateMode => _privateMode;
   String get searchEngine => _searchEngine;
@@ -67,6 +76,10 @@ class BrowserService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Clears private-session traces (cookies/cache). Persistent browsing
+  /// history is NOT wiped here — private mode never records, so there is
+  /// nothing private in it; wiping it on exiting private mode would destroy
+  /// the user's normal history (previous bug). Use clearHistory() for that.
   Future<void> clearPrivateData() async {
     if (!kIsWeb) {
       try {
@@ -76,10 +89,7 @@ class BrowserService extends ChangeNotifier {
         debugPrint('Failed to clear private data: $e');
       }
     }
-    _history.clear();
-    if (!kIsWeb) {
-      await _saveHistory();
-    }
+    notifyListeners();
   }
 
   bool get canGoBack {
@@ -122,7 +132,33 @@ class BrowserService extends ChangeNotifier {
 
   Future<void> _loadHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    _history = prefs.getStringList('history') ?? [];
+    // Preferred store: JSON entries with title + timestamp.
+    final raw = prefs.getString(_historyV2Key);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw) as List;
+        _historyEntries
+          ..clear()
+          ..addAll(decoded
+              .whereType<Map>()
+              .map((m) => HistoryEntry.fromJson(
+                  Map<String, dynamic>.from(m)))
+              .where((e) => e.url.isNotEmpty));
+        return;
+      } catch (_) {
+        // Fall through to legacy migration.
+      }
+    }
+    // One-time migration from the legacy URL-only list.
+    final legacy = prefs.getStringList(_legacyHistoryKey) ?? [];
+    _historyEntries
+      ..clear()
+      ..addAll(legacy
+          .where((u) => u.isNotEmpty)
+          .map((u) => HistoryEntry.fromUrl(u)));
+    if (legacy.isNotEmpty) {
+      await _saveHistory();
+    }
   }
 
   Future<void> _saveBookmarks() async {
@@ -132,7 +168,12 @@ class BrowserService extends ChangeNotifier {
 
   Future<void> _saveHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('history', _history);
+    try {
+      await prefs.setString(_historyV2Key,
+          jsonEncode(_historyEntries.map((e) => e.toJson()).toList()));
+      // Drop the legacy key once migrated so the two stores can't diverge.
+      await prefs.remove(_legacyHistoryKey);
+    } catch (_) {}
   }
 
   void createNewTab({String? url}) {
@@ -208,23 +249,37 @@ class BrowserService extends ChangeNotifier {
           url != currentTab.url &&
           url != 'about:blank' &&
           !_privateMode) {
-        _addToHistory(url);
+        _recordVisit(url, nextTab.title);
       }
 
       notifyListeners();
     }
   }
 
-  Future<void> _addToHistory(String url) async {
+  /// Records a visit (newest-first). Internal Navigwiz home pages are skipped
+  /// so history only shows real pages + searches, like other browsers.
+  /// Private mode never records.
+  Future<void> _recordVisit(String url, [String? title]) async {
     if (_privateMode) return;
-    if (!_history.contains(url)) {
-      _history.insert(0, url);
-      if (_history.length > 100) {
-        _history.removeLast();
-      }
-      await _saveHistory();
+    final trimmed = url.trim();
+    if (trimmed.isEmpty || trimmed == 'about:blank') return;
+    if (trimmed == DomainHelper.getNavigwizDomain()) return;
+    final displayTitle = (title == null || title.isEmpty)
+        ? DomainHelper.titleFromUrl(trimmed)
+        : title;
+    _historyEntries.insert(
+        0, HistoryEntry.fromUrl(trimmed, title: displayTitle));
+    if (_historyEntries.length > maxHistoryEntries) {
+      _historyEntries.removeRange(
+          maxHistoryEntries, _historyEntries.length);
     }
+    notifyListeners();
+    await _saveHistory();
   }
+
+  /// Public entry point for recording search queries and manual visits.
+  Future<void> recordVisit(String url, {String? title}) =>
+      _recordVisit(url, title);
 
   Future<void> addBookmark(String url) async {
     if (!_bookmarks.contains(url)) {
@@ -241,10 +296,31 @@ class BrowserService extends ChangeNotifier {
   }
 
   Future<void> clearHistory() async {
-    _history.clear();
-    if (!kIsWeb) {
+    _historyEntries.clear();
+    await _saveHistory();
+    notifyListeners();
+  }
+
+  /// Deletes a single history entry by id (falls back to matching url).
+  Future<void> removeHistoryEntry(String id) async {
+    final index =
+        _historyEntries.indexWhere((e) => e.id == id || e.url == id);
+    if (index != -1) {
+      _historyEntries.removeAt(index);
       await _saveHistory();
+      notifyListeners();
     }
+  }
+
+  /// Deletes history newer than [olderThan]. Null wipes everything.
+  Future<void> clearHistoryBefore(DateTime? olderThan) async {
+    if (olderThan == null) {
+      await clearHistory();
+      return;
+    }
+    _historyEntries
+        .removeWhere((e) => e.visitedAt.isAfter(olderThan));
+    await _saveHistory();
     notifyListeners();
   }
 
@@ -256,6 +332,7 @@ class BrowserService extends ChangeNotifier {
 
   Future<void> clearAllBrowsingData() async {
     await clearPrivateData();
+    await clearHistory();
     await clearBookmarks();
   }
 

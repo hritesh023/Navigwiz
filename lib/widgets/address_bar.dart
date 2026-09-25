@@ -106,8 +106,15 @@ class _AddressBarState extends State<AddressBar> {
 
   @override
   Widget build(BuildContext context) {
+    // Narrow phones (<600dp): the full desktop cluster (back/forward/
+    // reload + mic + camera + 4 toolbar buttons) squeezes the URL field to
+    // ~100px. Collapse to back/reload + field + one overflow menu so the
+    // field stays usable and every action remains reachable.
+    final isNarrow = MediaQuery.of(context).size.width < 600;
+    final navSize = isNarrow ? 40.0 : 32.0;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: EdgeInsets.symmetric(
+          horizontal: isNarrow ? 8 : 12, vertical: isNarrow ? 8 : 6),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -128,24 +135,30 @@ class _AddressBarState extends State<AddressBar> {
                     icon: Icons.arrow_back,
                     onPressed: widget.canGoBack ? widget.onBackPressed : null,
                     tooltip: 'Back',
+                    size: navSize,
                   ),
-                  const SizedBox(width: 2),
-                  _buildNavigationButton(
-                    icon: Icons.arrow_forward,
-                    onPressed: widget.canGoForward ? widget.onForwardPressed : null,
-                    tooltip: 'Forward',
-                  ),
+                  if (!isNarrow) ...[
+                    const SizedBox(width: 2),
+                    _buildNavigationButton(
+                      icon: Icons.arrow_forward,
+                      onPressed:
+                          widget.canGoForward ? widget.onForwardPressed : null,
+                      tooltip: 'Forward',
+                      size: navSize,
+                    ),
+                  ],
                   const SizedBox(width: 2),
                   _buildNavigationButton(
                     icon: Icons.refresh,
                     onPressed: widget.onReloadPressed,
                     tooltip: 'Reload',
                     isLoading: widget.isLoading,
+                    size: navSize,
                   ),
                 ],
               ),
 
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
 
               if (widget.isPrivate) ...[
                 _buildIncognitoBadge(),
@@ -225,22 +238,25 @@ class _AddressBarState extends State<AddressBar> {
               ),
 
               const SizedBox(width: 4),
-              _buildMiniInputButton(
-                icon: _listening ? Icons.mic_rounded : Icons.mic_outlined,
-                tooltip: _listening ? 'Stop listening' : 'Voice search',
-                highlight: _listening,
-                onPressed: _dictate,
-              ),
-              const SizedBox(width: 2),
-              _buildMiniInputButton(
-                icon: Icons.camera_alt_outlined,
-                tooltip: 'Ask with camera',
-                onPressed: _askWithCamera,
-              ),
-
-              if (widget.trailingActions.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                ...widget.trailingActions,
+              if (isNarrow)
+                _buildOverflowMenu()
+              else ...[
+                _buildMiniInputButton(
+                  icon: _listening ? Icons.mic_rounded : Icons.mic_outlined,
+                  tooltip: _listening ? 'Stop listening' : 'Voice search',
+                  highlight: _listening,
+                  onPressed: _dictate,
+                ),
+                const SizedBox(width: 2),
+                _buildMiniInputButton(
+                  icon: Icons.camera_alt_outlined,
+                  tooltip: 'Ask with camera',
+                  onPressed: _askWithCamera,
+                ),
+                if (widget.trailingActions.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  ...widget.trailingActions,
+                ],
               ],
             ],
           ),
@@ -304,19 +320,93 @@ class _AddressBarState extends State<AddressBar> {
     }
   }
 
+  /// Overflow menu for narrow phones: forward nav, voice, camera and the
+  /// desktop toolbar actions, all in one 40px touch target.
+  Widget _buildOverflowMenu() {
+    final theme = Theme.of(context);
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: PopupMenuButton<String>(
+        icon: Icon(Icons.more_vert,
+            size: 20, color: theme.colorScheme.onSurface),
+        padding: EdgeInsets.zero,
+        tooltip: 'More actions',
+        onSelected: (value) {
+          switch (value) {
+            case 'forward':
+              if (widget.canGoForward) widget.onForwardPressed();
+            case 'voice':
+              _dictate();
+            case 'camera':
+              _askWithCamera();
+          }
+        },
+        itemBuilder: (ctx) => [
+          PopupMenuItem(
+            value: 'forward',
+            enabled: widget.canGoForward,
+            child: const Row(
+              children: [
+                Icon(Icons.arrow_forward, size: 18),
+                SizedBox(width: 12),
+                Text('Forward'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'voice',
+            child: Row(
+              children: [
+                Icon(_listening ? Icons.mic_rounded : Icons.mic_outlined,
+                    size: 18),
+                const SizedBox(width: 12),
+                Text(_listening ? 'Stop listening' : 'Voice search'),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'camera',
+            child: Row(
+              children: [
+                Icon(Icons.camera_alt_outlined, size: 18),
+                SizedBox(width: 12),
+                Text('Ask with camera'),
+              ],
+            ),
+          ),
+          if (widget.trailingActions.isNotEmpty)
+            PopupMenuItem(
+              enabled: false,
+              child: Row(
+                children: [
+                  ...widget.trailingActions,
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNavigationButton({
     required IconData icon,
     required VoidCallback? onPressed,
     required String tooltip,
     bool isLoading = false,
+    double size = 32,
   }) {
     final theme = Theme.of(context);
     final enabled = onPressed != null;
     return Tooltip(
       message: tooltip,
       child: Container(
-        width: 32,
-        height: 32,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceContainer,
           borderRadius: BorderRadius.circular(8),
@@ -336,7 +426,7 @@ class _AddressBarState extends State<AddressBar> {
                 )
               : Icon(
                   icon,
-                  size: 16,
+                  size: size >= 40 ? 20 : 16,
                   color: enabled
                       ? theme.colorScheme.onSurface
                       : theme.colorScheme.onSurface.withValues(alpha: 0.3),

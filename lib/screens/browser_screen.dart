@@ -21,6 +21,7 @@ import '../widgets/saturn_logo.dart';
 import '../widgets/acronous_logo.dart';
 import '../widgets/navigwiz_search_results.dart';
 import 'acronous_chat_page.dart';
+import 'history_screen.dart';
 import 'settings_screen.dart';
 import 'workspace_screen.dart';
 import 'research_screen.dart';
@@ -191,13 +192,21 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Mobile (<600dp): drop the desktop title bar entirely and use a bottom
+    // nav instead, so the page gets ~32px more vertical space and all
+    // primary actions are reachable by thumb.
+    final isMobile = MediaQuery.of(context).size.width < 600;
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Column(
+      bottomNavigationBar: isMobile ? _buildMobileBottomNav() : null,
+      body: SafeArea(
+        top: !isMobile,
+        child: Column(
         children: [
-          Consumer<ThemeService>(
-            builder: (_, themeService, __) => _buildTitleBar(themeService),
-          ),
+          if (!isMobile)
+            Consumer<ThemeService>(
+              builder: (_, themeService, __) => _buildTitleBar(themeService),
+            ),
           Consumer<BrowserService>(
             builder: (_, browserService, __) => BrowserTabBar(
               tabs: browserService.tabs,
@@ -254,9 +263,15 @@ class _BrowserScreenState extends State<BrowserScreen> {
             child: Consumer<BrowserService>(
               builder: (_, browserService, __) {
                 final screenWidth = MediaQuery.of(context).size.width;
-                final aiWidth = math.min(400.0, screenWidth * 0.94);
-                final wsWidth = math.min(320.0, screenWidth * 0.94);
-                final custWidth = math.min(350.0, screenWidth * 0.94);
+                // On phones the side panels become full-width sheets so
+                // content isn't squeezed into a narrow sliver next to them.
+                final isNarrow = screenWidth < 600;
+                final aiWidth =
+                    isNarrow ? screenWidth : math.min(400.0, screenWidth * 0.94);
+                final wsWidth =
+                    isNarrow ? screenWidth : math.min(320.0, screenWidth * 0.94);
+                final custWidth =
+                    isNarrow ? screenWidth : math.min(350.0, screenWidth * 0.94);
                 return Stack(
                   children: [
                     browserService.activeTab != null
@@ -317,6 +332,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -407,7 +423,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
               child: NavSearchBar(
                 controller: _homeSearchController,
                 hintText: 'What do you want to do?...',
-                autofocus: true,
+                // Don't steal focus on phones: the keyboard popping up on
+                // every new tab is the #1 "clumsy" complaint.
+                autofocus:
+                    MediaQuery.of(context).size.width >= 600,
                 onSubmitted: _submitHomeSearch,
                 onSubmitPressed: () =>
                     _submitHomeSearch(_homeSearchController.text),
@@ -588,6 +607,144 @@ class _BrowserScreenState extends State<BrowserScreen> {
     }
     if (query.isEmpty) return;
     Provider.of<BrowserService>(context, listen: false).navigateToUrl(query);
+  }
+
+  /// Thumb-friendly bottom navigation for phones. Replaces the desktop title
+  /// bar (hidden below 600dp): Home, Research, AI Chat, Workspaces, Menu.
+  /// Everything else (Projects, History, Private, Settings, Sign out) lives
+  /// in the Menu sheet so nothing is lost, just decluttered.
+  Widget _buildMobileBottomNav() {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          border: Border(
+            top: BorderSide(
+              color: theme.dividerColor.withValues(alpha: 0.3),
+            ),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _mobileNavItem(Icons.home_outlined, 'Home', () {
+              Provider.of<BrowserService>(context, listen: false)
+                  .createNewTab();
+            }),
+            _mobileNavItem(Icons.travel_explore, 'Research', () {
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const ResearchScreen()));
+            }),
+            _mobileNavItem(Icons.auto_awesome, 'AI Chat', () {
+              setState(() => _showAiAssistantPanel = !_showAiAssistantPanel);
+            }, active: _showAiAssistantPanel),
+            _mobileNavItem(Icons.workspaces_outline, 'Spaces', () {
+              setState(() => _showWorkspacePanel = !_showWorkspacePanel);
+            }, active: _showWorkspacePanel),
+            _mobileNavItem(Icons.menu, 'Menu', _openMobileMenu),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _mobileNavItem(IconData icon, String label, VoidCallback onTap,
+      {bool active = false}) {
+    final theme = Theme.of(context);
+    final color = active
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurfaceVariant;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22, color: color),
+            const SizedBox(height: 2),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: color,
+                    fontWeight:
+                        active ? FontWeight.w600 : FontWeight.w400)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openMobileMenu() {
+    final browserService =
+        Provider.of<BrowserService>(context, listen: false);
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.code),
+              title: const Text('Projects'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const ProjectScreen()));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('History'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const HistoryScreen()));
+              },
+            ),
+            ListTile(
+              leading: Icon(browserService.isPrivateMode
+                  ? Icons.visibility_off
+                  : Icons.visibility_outlined),
+              title: Text(browserService.isPrivateMode
+                  ? 'Exit Incognito'
+                  : 'New Incognito Tab'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _togglePrivateMode();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Settings'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const SettingsScreen()));
+              },
+            ),
+            if (auth.isSignedIn)
+              ListTile(
+                leading: Icon(Icons.logout, color: Colors.red[400]),
+                title: Text('Sign Out',
+                    style: TextStyle(color: Colors.red[400])),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  auth.redirectToLogout();
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _togglePrivateMode() async {
