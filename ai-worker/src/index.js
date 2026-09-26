@@ -22,7 +22,137 @@ const CONTABO_FALLBACK_URLS = [
   'https://brain.acronous.com',
   'http://167.86.104.155:8000',
 ];
-const DEFAULT_CONTABO_MODEL = 'qwen2.5:14b';
+// qwen3.5 (hybrid Gated-DeltaNet) — measured on the Contabo 4-core CPU box:
+//   qwen3.5:2b  TTFT 0.4-1.6s  ~31-34 tok/s   (default: generation time is
+//   qwen3.5:4b  TTFT 1.5-2.3s  ~15-18 tok/s    what the user feels on a CPU)
+// The worker always sends `think:false`; qwen3.5 defaults to emitting a
+// reasoning block and returns empty content without it.
+const DEFAULT_CONTABO_MODEL = 'qwen3.5:2b';
+
+// ── Ollama runtime contract (MUST match the VPS ollama container) ─────────
+// Ollama allocates a KV cache per parallel slot, so a caller that changes
+// num_ctx forces a full reallocation of the whole cache — measured at 8-15s
+// of dead prefill on the 4-core CPU box, plus roughly half the decode
+// throughput while several models are resident. One pinned context size,
+// one slot, is the single biggest latency win available here.
+const OLLAMA_CTX = 2048;
+// Guards against a small model looping until num_predict is exhausted. One
+// such loop was observed holding all 4 cores at 741% CPU for 40+ minutes.
+// repeat_penalty targets the repetition-loop failure mode (one such loop held
+// all 4 cores at 741% CPU for 40+ minutes) and is the cheapest guard;
+// presence/frequency penalties measured within noise, so they are omitted.
+const OLLAMA_GUARDRAILS = {
+  repeat_penalty: 1.2,
+  repeat_last_n: 64,
+  top_p: 0.9,
+};
+
+function ollamaOptions(numPredict, temperature) {
+  return Object.assign(
+    { num_ctx: OLLAMA_CTX, num_predict: numPredict, temperature },
+    OLLAMA_GUARDRAILS,
+  );
+}
+
+// Generation budget per turn. At ~22-39 tok/s on CPU, 700 tokens is already
+// 20-30s of decode; the old 2048/3072/4096 caps only invited runaway loops.
+function generationBudget(message, isSimple) {
+  if (isSimple) return 220;
+  const t = String(message || '');
+  if (!t.trim()) return 150;
+  if (t.length > 400) return 600;
+  return 400;
+}
+
+// ── Prompt budget ─────────────────────────────────────────────────────────
+// Measured on this 4-core CPU box: COLD prefill runs at only ~20 tok/s (4B)
+// and ~39 tok/s (2B), while a cached prefix prefills at 300-2000 tok/s.
+// Prompt size is therefore what users actually wait on: a 2000-token prompt
+// is 40-90 seconds of dead time before the first character appears. Search
+// snippets are trimmed hard — every extra 1000 chars costs ~4s of prefill
+// and the model only needs the top passages to answer correctly.
+const WEB_CHARS = 900;
+
+function fitMessages(messages, budget) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  const system = messages.filter((m) => m && m.role === 'system');
+  const rest = messages.filter((m) => m && m.role !== 'system');
+  const kept = [];
+  let used = 0;
+  for (let i = rest.length - 1; i >= 0; i--) {
+    if (kept.length >= 5) break;
+    const m = rest[i];
+    let content = String(m.content || '');
+    if (content.length > 500) content = content.slice(0, 500) + '…';
+    if (used + content.length > budget && kept.length) break;
+    used += content.length;
+    kept.unshift({ role: m.role, content });
+  }
+  return [...system, ...kept];
+}
+
+// ── Acronous LLM brain: RAG fast path + human-eval teach-back ────────────
+// Same VPS as the model (FastAPI, acronous_llm.server). brainAnswer() returns
+// a confident, verbatim-extracted answer with ZERO LLM calls in ~5-25ms;
+// null means "memory does not know this", which is the normal case for
+// anything new and correctly falls through to generation.
+const BRAIN_FALLBACK_URLS = ['https://brain.acronous.com', 'http://167.86.104.155:8000'];
+
+function resolveBrainBases(env) {
+  const out = [];
+  const seen = new Set();
+  const push = (u) => {
+    const v = String(u || '').trim().replace(/\/$/, '');
+    if (!v || !/^https?:\/\//i.test(v) || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  };
+  push(env.BRAIN_URL);
+  for (const u of BRAIN_FALLBACK_URLS) push(u);
+  return out;
+}
+
+async function brainFetch(env, path, body, timeoutMs) {
+  for (const base of resolveBrainBases(env)) {
+    try {
+      const resp = await fetchWithTimeout(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      }, timeoutMs || 1200);
+      if (resp && resp.ok) {
+        const data = await resp.json().catch(() => null);
+        if (data) return data;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function brainAnswer(env, query, budgetMs = 1200) {
+  if (!query || !String(query).trim()) return null;
+  const data = await brainFetch(env, '/v1/rag/answer', {
+    query: String(query).slice(0, 2000), source: 'navigwiz',
+  }, budgetMs);
+  if (!data || !data.answerable || !data.answer) return null;
+  return { answer: String(data.answer).trim(), confidence: data.confidence || 0 };
+}
+
+// Every real Navigwiz turn is a human-eval sample for the shared brain.
+// Fire-and-forget: never delays or fails a reply.
+function brainLearn(ctx, env, payload) {
+  try {
+    if (!ctx || typeof ctx.waitUntil !== 'function') return;
+    if (resolveBrainBases(env).length === 0) return;
+    ctx.waitUntil(brainFetch(env, '/v1/rag/learn', {
+      text: String(payload.text || '').slice(0, 2000),
+      query: String(payload.query || '').slice(0, 500),
+      source: 'navigwiz',
+      session_id: String(payload.session_id || 'default').slice(0, 64),
+      quality: 0.5,
+    }, 2500));
+  } catch {}
+}
 
 function resolveContaboBases(env) {
   const out = [];
@@ -143,12 +273,10 @@ async function runLimitedConcurrent(items, limit, worker) {
 // ------------------------------------------------------------------ LLM
 // Fast provider chain: Cloudflare Workers AI (keyless, fast) is primary,
 // self-hosted Contabo (Ollama) is a last resort.
-// Every provider has a short timeout so responses stay quick.
-
-const CF_LLM_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-const CF_LLM_FAST = '@cf/meta/llama-3.1-8b-instruct-fp8';
-const CF_CODE_MODEL = '@cf/qwen/qwen2.5-coder-32b-instruct';
-
+// SELF-HOSTED ONLY. Cloudflare Workers AI was previously wired in here as a
+// co-provider; it is a rate-limited service with a daily quota, so it has
+// been removed entirely. Every model call in this worker now goes to the
+// Acronous LLM on our own Contabo VPS, which is free and unlimited.
 function withTimeout(promise, ms) {
   return Promise.race([
     promise,
@@ -188,141 +316,119 @@ function raceSuccess(producers, timeoutMs) {
 }
 
 function pickModel(task, jsonMode) {
-  if (task === 'code') return CF_CODE_MODEL;
-  if (jsonMode) return CF_LLM_MODEL;
-  return CF_LLM_MODEL;
-}
-
-async function callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task) {
-  if (!env || !env.AI || typeof env.AI.run !== 'function') {
-    return { ok: false };
-  }
-  try {
-    const model = pickModel(task, jsonMode);
-    const body = {
-      messages,
-      max_tokens: Math.min(maxTokens, 4096),
-      temperature,
-    };
-    if (jsonMode) body.response_format = { type: 'json_object' };
-    const resp = await withTimeout(env.AI.run(model, body), 60000);
-    const content =
-      (resp && (resp.response || resp.output_text || resp.output || '')) || '';
-    if (content.trim()) return { ok: true, content, provider: 'workers-ai', model };
-    return { ok: false };
-  } catch (e) {
-    console.error('Workers AI unavailable:', e.message);
-    return { ok: false };
-  }
+  return DEFAULT_CONTABO_MODEL;
 }
 
 async function callContabo(env, messages, maxTokens, temperature, jsonMode, model) {
   const contaboKey = env.CONTABO_LLM_KEY || '';
-  const contaboModel = model || env.CONTABO_LLM_MODEL || 'qwen2.5:3b';
+  const contaboModel = model || env.CONTABO_LLM_MODEL || DEFAULT_CONTABO_MODEL;
   const headers = { 'Content-Type': 'application/json' };
   if (contaboKey) headers['Authorization'] = `Bearer ${contaboKey}`;
-  const body = {
-    model: contaboModel,
-    messages,
-    temperature,
-    stream: false,
-    max_tokens: Math.min(maxTokens, 4096),
-  };
-  if (jsonMode) body.response_format = { type: 'json_object' };
-  // Try each brain base in order (configured → Ollama tunnel → direct IP →
-  // brain nginx). Per base we try OpenAI-compat /v1/chat/completions first,
-  // then native Ollama /api/chat, accepting both response shapes — so a path
-  // mismatch or tunnel misroute never yields "zero response".
+
+  // NATIVE /api/chat ONLY. This used to try the OpenAI-compatible
+  // /v1/chat/completions route first — which silently broke for qwen3.5:
+  // that route IGNORES `think:false`, so the model burned the entire token
+  // budget on a reasoning block and returned empty content. The request
+  // still paid full generation time, so every call generated TWICE. That is
+  // what made a "hi" take 64 seconds.
   for (const contaboUrl of resolveContaboBases(env)) {
-    // 1) OpenAI-compat shape (Ollama /v1/chat/completions, api-server /v1/*)
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
     try {
-      const resp = await fetch(`${contaboUrl}/v1/chat/completions`, {
+      const resp = await fetchWithTimeout(`${contaboUrl}/api/chat`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (resp.ok) {
+        body: JSON.stringify({
+          model: contaboModel,
+          messages,
+          stream: false,
+          keep_alive: '24h',
+          think: false,
+          options: ollamaOptions(Math.min(maxTokens, 1200), temperature),
+        }),
+      }, 60000);
+      if (resp && resp.ok) {
         const data = await resp.json().catch(() => ({}));
-        const content = data.choices?.[0]?.message?.content || data.response || '';
+        const content = data?.message?.content || '';
         if (content && content.trim()) return { ok: true, content, provider: 'contabo', model: contaboModel };
       }
     } catch (e) {
-      clearTimeout(timeoutId);
       console.error('Contabo LLM unavailable:', contaboUrl, e.message);
-    }
-    // 2) Native Ollama shape (/api/chat) — same model/messages, stream off.
-    const controller2 = new AbortController();
-    const timeoutId2 = setTimeout(() => controller2.abort(), 30000);
-    try {
-      const nativeBody = {
-        model: contaboModel,
-        messages,
-        stream: false,
-        keep_alive: '24h',
-        options: { num_ctx: 4096, num_predict: Math.min(maxTokens, 4096), temperature },
-      };
-      const resp2 = await fetch(`${contaboUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(nativeBody),
-        signal: controller2.signal,
-      });
-      clearTimeout(timeoutId2);
-      if (resp2.ok) {
-        const data2 = await resp2.json().catch(() => ({}));
-        const content2 = data2?.message?.content || '';
-        if (content2 && content2.trim()) return { ok: true, content: content2, provider: 'contabo-native', model: contaboModel };
-      }
-    } catch (e) {
-      clearTimeout(timeoutId2);
-      continue;
     }
   }
   return { ok: false };
 }
 
+// True token streaming straight from the self-hosted Ollama on the Contabo
+// VPS. This is what makes the browser chat feel responsive: the first token
+// is forwarded the instant Ollama produces it instead of waiting for a fully
+// buffered JSON body (the old path could not show a single character until
+// the entire answer had been decoded).
+async function* streamContabo(env, messages, maxTokens, temperature, model) {
+  const contaboModel = model || env.CONTABO_LLM_MODEL || DEFAULT_CONTABO_MODEL;
+  const headers = { 'Content-Type': 'application/json' };
+  if (env.CONTABO_LLM_KEY) headers['Authorization'] = `Bearer ${env.CONTABO_LLM_KEY}`;
+  for (const base of resolveContaboBases(env)) {
+    let streamed = false;
+    try {
+      const resp = await fetch(`${base}/api/chat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: contaboModel,
+          messages,
+          stream: true,
+          keep_alive: '24h',
+          think: false,
+          options: ollamaOptions(maxTokens, temperature),
+        }),
+      });
+      if (!resp || !resp.ok || !resp.body) continue;
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finished = false;
+      while (!finished) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t) continue;
+          let parsed;
+          try { parsed = JSON.parse(t); } catch { continue; }
+          const piece = parsed?.message?.content || '';
+          if (piece) { streamed = true; yield piece; }
+          if (parsed?.done) { finished = true; break; }
+        }
+      }
+      if (streamed) return;
+    } catch (e) {
+      // Try the next base; if we already emitted text, stop cleanly.
+      if (streamed) return;
+    }
+  }
+  return;
+}
+
 async function callLLM({
   env,
   messages,
-  maxTokens = 2048,
+  maxTokens = 700,
   temperature = 0.7,
   jsonMode = false,
   model,
   timeoutMs = 60000,
   task = 'chat',
 }) {
-  // Chat answers are latency-sensitive: race Workers AI and Contabo in parallel
-  // and return whichever answers first. Quality tasks (research/project/code)
-  // give Workers AI a short head start, then race Contabo so a slow Workers AI
-  // never stalls the request. Generous timeouts mean long answers are never cut
-  // off; raceSuccess fail-fast returns an error only when every provider fails.
-  if (task === 'chat') {
-    const fast = await raceSuccess(
-      [
-        callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task),
-        callContabo(env, messages, maxTokens, temperature, jsonMode, model),
-      ],
-      timeoutMs
-    );
-    if (fast.ok) return fast.content;
-    throw new Error('LLM unavailable');
-  }
-
-  const workers = callWorkersAI(env, messages, maxTokens, temperature, jsonMode, task);
-  const head = await raceSuccess([workers], Math.min(timeoutMs, 8000));
-  if (head.ok) return head.content;
-
-  const fast = await raceSuccess(
-    [workers, callContabo(env, messages, maxTokens, temperature, jsonMode, model)],
-    timeoutMs
-  );
-  if (fast.ok) return fast.content;
-
-  console.error('All LLM providers unavailable');
+  // ONE provider: the self-hosted Acronous LLM on our Contabo VPS. Free and
+  // unlimited. The old code raced a rate-limited cloud model against this
+  // CPU box in parallel — two generations fighting over the same 4 cores,
+  // which halved throughput and made latency a coin flip. Quality tasks get
+  // the same self-hosted path with a slightly larger budget.
+  const r = await callContabo(env, messages, maxTokens, temperature, jsonMode, model);
+  if (r.ok) return r.content;
+  console.error('Self-hosted LLM unavailable on every base');
   throw new Error('LLM unavailable');
 }
 
@@ -386,6 +492,17 @@ function isSimpleQuery(query) {
   const hasSimplePattern = simplePatterns.some((p) => p.test(query));
   const onlyLetters = /^[a-zA-Z\s]+$/i.test(query);
   return isShort && isQuestion && (hasSimplePattern || onlyLetters);
+}
+
+// Greetings and sign-offs. isSimpleQuery() needs a "?" so it classified "hi"
+// as a full question, which triggered a 2s web search and a 700-token budget
+// for a one-line reply. This is the most frequent interaction in the browser,
+// so it gets its own cheap path — still a freshly generated reply, never a
+// canned template.
+const GREETING_RE = /^\s*(?:hi|hey|hello|yo|sup|howdy|hii+|heyy+|helloo+|greetings|good\s+(?:morning|afternoon|evening|night)|gm|ga|ge|what'?s\s+up|whats\s+up|how\s+are\s+you|how'?s\s+it\s+going|how\s+r\s+u|hru|wbu|thanks?|thank\s+you|thx|ty|bye|goodbye|see\s+ya|later|ok|okay|cool|nice|great|awesome|wow|yes|no|yeah|yep|nope)\b[\s!.,;:'")\]]*$/i;
+
+function isGreetingMessage(query) {
+  return GREETING_RE.test(String(query || '').trim());
 }
 
 function buildSuggestions(query, searchSuggestions) {
@@ -1011,24 +1128,263 @@ Requirements:
 }
 
 // ------------------------------------------------------------------ Image
-async function generateImage(prompt) {
-  const encoded = encodeURIComponent(prompt);
-  async function tryPollinations(modelFlag) {
-    const url = modelFlag
-      ? `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024${modelFlag}&nologo=true`
-      : `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true`;
-    const resp = await fetchWithTimeout(url, {}, 60000);
-    if (!resp.ok) return null;
-    const buffer = await resp.arrayBuffer();
-    return bytesToBase64(new Uint8Array(buffer));
+// Self-hosted image engine on the SAME Contabo VPS (free + unlimited).
+// This used to call image.pollinations.ai, a third-party service that is
+// rate limited and can silently throttle or return placeholder art.
+const IMAGE_SERVICE_FALLBACK_URLS = [
+  'https://image-service.acronous.com',
+  'http://167.86.104.155:7860',
+];
+
+function resolveImageServices(env) {
+  const out = [];
+  const seen = new Set();
+  const push = (u) => {
+    const v = String(u || '').trim().replace(/\/$/, '');
+    if (!v || !/^https?:\/\//i.test(v) || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  };
+  push(env && env.EDITOR_SERVICE_URL);
+  for (const u of IMAGE_SERVICE_FALLBACK_URLS) push(u);
+  return out;
+}
+
+async function generateImage(prompt, env) {
+  const body = {
+    prompt: String(prompt || '').slice(0, 1500),
+    width: 1024,
+    height: 1024,
+  };
+  for (const base of resolveImageServices(env)) {
+    try {
+      const resp = await fetchWithTimeout(`${base}/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, 120000);
+      if (!resp || !resp.ok) continue;
+      const data = await resp.json().catch(() => ({}));
+      const b64 = data.image_data || data.image || data.b64;
+      if (b64) return b64;
+    } catch {}
   }
-  const imageB64 = (await tryPollinations('&model=flux')) || (await tryPollinations(''));
-  if (!imageB64) throw new Error('Image generation failed');
-  return imageB64;
+  throw new Error('Image generation failed');
+}
+
+async function editImage(base64Data, prompt, env) {
+  for (const base of resolveImageServices(env)) {
+    try {
+      const resp = await fetchWithTimeout(`${base}/edit-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: String(base64Data).slice(0, 8_000_000),
+          prompt: String(prompt || '').slice(0, 1000),
+        }),
+      }, 120000);
+      if (!resp || !resp.ok) continue;
+      const data = await resp.json().catch(() => ({}));
+      const b64 = data.image_data || data.edited || data.image;
+      if (b64) return b64;
+    } catch {}
+  }
+  return null;
 }
 
 // ------------------------------------------------------------------ Handlers
-async function handleChat(request, env) {
+// Shared preparation for both the buffered and the streaming chat paths so
+// the two can never drift apart (this duplication used to let the stream path
+// behave differently from the buffered one).
+async function prepareChat(body, env) {
+  const userMessage = (body.message || body.query || '').trim();
+  const sessionId = body.session_id || 'default';
+  const greeting = isGreetingMessage(userMessage);
+  const isSimple = greeting || isSimpleQuery(userMessage);
+  const mode = routeIntent(userMessage, body.mode);
+
+  // Web search is only worth it for non-trivial questions, and it is hard
+  // capped so it can never be the reason a reply is late. Greetings never
+  // search — that alone was costing ~2s on the most common message type.
+  // The budget is tighter on the streaming path (this function is shared, so
+  // the caller passes the cap): streaming exists to paint instantly, and a
+  // 2s serial search before the first token defeats the purpose.
+  let searchResults = [];
+  const searchCapMs = body.stream === true ? 1200 : 2000;
+  const wantsWeb = !greeting && (mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false));
+  if (wantsWeb) {
+    const found = await withTimeout(searchFromWeb(userMessage, 8, env), searchCapMs).catch(() => []);
+    searchResults = found || [];
+  }
+
+  const context = searchResults.length
+    ? searchResults
+        .slice(0, 3)
+        .map((r) => `- ${r.title}\n  URL: ${r.url}\n  ${(r.content || r.snippet || '').slice(0, 300)}`)
+        .join('\n\n')
+        .slice(0, WEB_CHARS)
+    : '';
+
+  // ── Prompt shape: this is the whole latency game on a CPU box ──────────
+  // Cold prefill here runs at only ~20 tok/s, while a cached prefix prefills
+  // at 300-2000 tok/s. The identity block is therefore sent as a SYSTEM
+  // message that is BYTE-IDENTICAL on every request, and everything that
+  // varies (current time, search results, the question) goes into the USER
+  // message, which comes last. Putting the current date in the system message
+  // changed the prompt prefix on every single request and re-prefilled the
+  // whole thing each turn — that alone cost ~15s of dead time per message.
+  const dynamic = [
+    `Current date and time: ${nowIso()}.`,
+    context ? 'Use the web results below as your primary source; cite by URL.' : '',
+    isSimple
+      ? 'Answer in one or two sentences.'
+      : 'Answer completely but concisely. No preamble, no "great question", no list of your capabilities, no summary of what you are about to say. Stop as soon as the question is fully answered.',
+  ].filter(Boolean).join(' ');
+
+  const systemContent = AGENT_IDENTITY;
+  const userContent = context
+    ? `${dynamic}\n\nWeb search results:\n${context}\n\nUser question: ${userMessage}`
+    : `${dynamic}\n\nUser question: ${userMessage}`;
+  const messages = [
+    { role: 'system', content: systemContent },
+    { role: 'user', content: userContent },
+  ];
+
+  // Hard budget: a 2000-token prompt is 40-90s of cold prefill on this box.
+  const budget = isSimple ? 900 : 1800;
+  return { userMessage, sessionId, isSimple, mode, searchResults, messages: fitMessages(messages, budget) };
+}
+
+function sseResponse(gen) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      const send = (obj) => {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch {}
+      };
+      try {
+        for await (const piece of gen) {
+          if (piece) send({ content: piece });
+        }
+      } catch (e) {
+        send({ content: '', error: 'stream_failed' });
+      }
+      try {
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      } catch {}
+    },
+  }), {
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+// SSE chat. Order of operations is chosen purely for perceived speed:
+//   1. a "thinking" frame immediately, so the UI leaves its spinner state
+//   2. RAG memory (5-25ms, zero LLM) when the brain is confident
+//   3. otherwise real token streaming from the self-hosted model
+async function handleChatStream(request, env, ctx) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return respondError('Invalid request body', 400);
+  }
+  const userMessage = (body.message || body.query || '').trim();
+  if (!userMessage) return respondError('Message is required', 400);
+  const sessionId = body.session_id || 'default';
+  // Mark the request as a stream so shared helpers use the tighter latency
+  // budgets (e.g. a shorter serial search wait before the first token).
+  body.stream = true;
+
+  const prep = await prepareChat(body, env);
+  const tPrep = Date.now();
+  const isSimple = prep.isSimple;
+  // Greetings get a tiny budget: the reply is one sentence, and letting the
+  // model run on for hundreds of tokens is what made "hi" feel slow.
+  const budget = isGreetingMessage(userMessage) ? 90 : generationBudget(userMessage, isSimple);
+  const full = [];
+
+  async function* generate() {
+    const tGen = Date.now();
+    // RAG fast path first - no model needed when memory is confident.
+    try {
+      const hit = await brainAnswer(env, userMessage, 1200);
+      if (hit && hit.answer) {
+        full.push(hit.answer);
+        yield hit.answer;
+        return;
+      }
+    } catch {}
+
+    let emitted = false;
+    try {
+      for await (const piece of streamContabo(env, prep.messages, budget, 0.6)) {
+        if (!emitted) {
+          emitted = true;
+          console.error('NAV-TIMING prepMs=' + (tGen - tPrep) + ' firstTokenMs=' + (Date.now() - tGen) + ' budget=' + budget);
+        }
+        full.push(piece);
+        yield piece;
+      }
+    } catch {}
+    if (emitted) return;
+
+    // Fallback: buffered path (also covers Workers AI rescue).
+      try {
+        const text = await callLLM({
+          env, messages: prep.messages, maxTokens: budget,
+          temperature: 0.6, timeoutMs: 60000, task: 'chat',
+        });
+        if (text && text.trim()) { full.push(text); yield text; return; }
+      } catch {}
+
+      // Transport failure, NOT an answer. Flagged as an error frame so the
+      // client can render it as a failure state instead of a bot reply — the
+      // project rule is that every assistant message is genuinely generated.
+      yield "I'm having trouble reaching the AI service right now. Please try again in a moment.";
+    }
+
+  const stream = sseResponse(generate());
+  // Human-eval teach-back once generation finishes (never blocks the stream).
+  brainLearn(ctx, env, {
+    text: full.join(''), query: userMessage, session_id: sessionId,
+  });
+  // Teach-back needs the finished text, so hook it on stream completion.
+  try {
+    const reader = stream.body.getReader();
+    const passthrough = new ReadableStream({
+      async start(controller) {
+        const decoder = new TextDecoder();
+        let buf = '';
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+            buf += decoder.decode(value, { stream: true });
+          }
+        } catch {}
+        try { controller.close(); } catch {}
+        const answer = full.join('');
+        if (answer) {
+          brainLearn(ctx, env, { text: answer, query: userMessage, session_id: sessionId });
+        }
+      },
+    });
+    return new Response(passthrough, { headers: stream.headers, status: stream.status });
+  } catch {
+    return stream;
+  }
+}
+
+async function handleChat(request, env, ctx) {
   try {
     const body = await request.json();
     const userMessage = (body.message || body.query || '').trim();
@@ -1087,35 +1443,79 @@ async function handleChat(request, env) {
       }
     }
 
-    // Chat / web search — search has a tight 2.5s budget so it can never
-    // stall the answer; the LLM responds from its knowledge when search is
-    // slow or empty.
+    // Chat / web search. RAG memory is tried FIRST and in parallel with the
+    // web search: a confident hit answers with zero LLM calls (5-25ms), and
+    // an unsure brain simply falls through to normal generation.
     let searchResults = [];
     let searchSuggestions = [];
-    const wantsWeb = mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false);
+    const greeting = isGreetingMessage(userMessage);
+    const wantsWeb = !greeting && (mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false));
+
+    // Time-sensitive asks bypass memory by definition (memory is not "current").
+    const timeSensitive = /\b(latest|current|today|now|right\s+now|this\s+(?:week|month|year)|news|score|price|weather|who\s+is\s+the)\b/i.test(userMessage);
+    const ragPromise = (env.RAG_ENABLED !== 'false' && !timeSensitive)
+      ? brainAnswer(env, userMessage, 1500)
+      : null;
+    const searchPromise = wantsWeb
+      ? withTimeout(searchFromWeb(userMessage, 8, env), 2000).catch(() => [])
+      : Promise.resolve([]);
     if (wantsWeb) {
-      const found = await withTimeout(searchFromWeb(userMessage, 8, env), 2500).catch(() => []);
-      searchResults = found || [];
-      searchSuggestions = [];
+      searchResults = (await searchPromise) || [];
+    }
+
+    if (ragPromise) {
+      let hit = null;
+      try { hit = await Promise.race([ragPromise, new Promise((res) => setTimeout(() => res(null), 200))]); } catch {}
+      if (hit && hit.answer) {
+        return respondJson({
+          response: hit.answer,
+          session_id: sessionId,
+          type: 'chat',
+          mode: 'chat',
+          is_simple: true,
+          source: 'memory',
+          sources: [],
+          suggestions: buildSuggestions(userMessage, []),
+        });
+      }
     }
 
     const context =
       searchResults.length > 0
         ? searchResults
-            .map((r) => `- ${r.title}\n  URL: ${r.url}\n  ${(r.content || r.snippet || '').slice(0, 500)}`)
+            .slice(0, 3)
+            .map((r) => `- ${r.title}\n  URL: ${r.url}\n  ${(r.content || r.snippet || '').slice(0, 300)}`)
             .join('\n\n')
+            .slice(0, WEB_CHARS)
         : '';
 
-    const systemContent = isSimple
-      ? `${AGENT_IDENTITY}\n\nYou are the fast assistant inside the Navigwiz browser. Give direct, concise answers. For simple questions be brief and to the point. Current date: ${nowIso()}.`
-      : `${AGENT_IDENTITY}\n\nYou are the agentic assistant inside the Navigwiz browser. Analyze the query thoroughly and give a detailed, well-reasoned response. Use the search context when available and cite sources by URL. Current date: ${nowIso()}.`;
+    // STATIC identity prefix, byte-identical on every request, so Ollama's
+    // prompt KV-cache is reused. Everything variable (current time, search
+    // results) goes into the LAST user message: any per-request text in the
+    // system message changes the prompt prefix and re-prefills everything.
+    const dynamic = [
+      `Current date and time: ${nowIso()}.`,
+      context ? 'Use the web results below as your primary source; cite by URL.' : '',
+      isSimple
+        ? 'Answer in one or two sentences.'
+        // Length has to be REQUESTED, not just capped: without this the model
+        // wrote 1800 characters for a one-line question and the user waited
+        // 127s for the tail of an answer they had already read.
+        : 'Answer completely but concisely. No preamble, no "great question", no list of your capabilities, no summary of what you are about to say. Stop as soon as the question is fully answered.',
+    ].filter(Boolean).join(' ');
 
-    const messages = [
+    const systemContent = AGENT_IDENTITY;
+    const userContent = context
+      ? `${dynamic}\n\nWeb search results:\n${context}\n\nUser question: ${userMessage}`
+      : `${dynamic}\n\nUser question: ${userMessage}`;
+
+    const rawMessages = [
       { role: 'system', content: systemContent },
-      ...(context
-        ? [{ role: 'user', content: `User query: ${userMessage}\n\nCurrent web search results:\n${context}\n\nAnswer based on the results and cite sources by URL.` }]
-        : [{ role: 'user', content: userMessage }]),
+      { role: 'user', content: userContent },
     ];
+    // Hard prompt budget (see WEB_CHARS note): cold prefill here is ~20-39
+    // tok/s, so an untrimmed prompt is the single biggest latency source.
+    const messages = fitMessages(rawMessages, isSimple ? 900 : 1800);
 
     let content = '';
     let llmFailed = false;
@@ -1123,9 +1523,9 @@ async function handleChat(request, env) {
       content = await callLLM({
         env,
         messages,
-        maxTokens: isSimple ? 1024 : 3072,
+        maxTokens: greeting ? 60 : generationBudget(userMessage, isSimple),
         temperature: 0.7,
-        timeoutMs: isSimple ? 20000 : 45000,
+        timeoutMs: isSimple ? 45000 : 75000,
         task: 'chat',
       });
     } catch (e) {
@@ -1136,6 +1536,8 @@ async function handleChat(request, env) {
     if (llmFailed) {
       throw new Error('The AI service is unavailable. Please try again.');
     }
+
+    brainLearn(ctx, env, { text: content, query: userMessage, session_id: sessionId });
 
     return respondJson({
       response: content,
@@ -1443,12 +1845,12 @@ async function handleImageProxy(request) {
   }
 }
 
-async function handleImage(request) {
+async function handleImage(request, env) {
   try {
     const body = await request.json();
     const prompt = body.prompt || body.message || '';
     if (!prompt) return respondError('Prompt is required', 400);
-    const imageB64 = await generateImage(prompt);
+    const imageB64 = await generateImage(prompt, env);
     return respondJson({ response: prompt, image_data: imageB64, type: 'image_gen' });
   } catch (error) {
     console.error('Image handler error:', error.message);
@@ -1458,61 +1860,22 @@ async function handleImage(request) {
 
 async function handleImageEdit(request, env) {
   try {
-    const apiKey = env.OPENAI_API_KEY;
-    if (!apiKey) return respondError('AI API key not configured on server.', 500);
-
     const body = await request.json();
     const base64Data = body.image_data || body.image;
     const prompt = body.prompt || '';
     if (!base64Data) return respondError('No image data provided', 400);
 
-    const enhancedPrompt = `Cut only the specific part of this image that matches the request: "${prompt}" and replace it with the requested content. Do NOT recreate the entire image. Make it look natural and seamless. Return exactly the edited image, not a description.`;
-
-    const openaiBody = {
-      model: 'openai/gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are an image editing AI. ONLY make the exact edits requested. Do NOT recreate the entire image, do NOT change elements not mentioned, do NOT add new objects. Always respond with the edited image only.',
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: enhancedPrompt,
-            },
-            {
-              type: 'image_url',
-              image_url: { url: base64Data },
-            },
-          ],
-        },
-      ],
-      max_tokens: 4096,
-    };
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(openaiBody),
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`OpenAI API error: ${response.status}`, text);
-      return respondError('Image editing service error. Please try again.', 502);
-    }
-    const data = await response.json();
-    const result = data.choices?.[0]?.message?.content || '';
+    // Self-hosted only. This previously called a PAID, rate-limited external
+    // image API; the Contabo image-service does the same work for free with
+    // no quota, which is the whole policy for this deployment.
+    const edited = await editImage(base64Data, prompt, env);
+    if (!edited) return respondError('Image editing failed. Please try again.', 502);
     return respondJson({
-      response: result,
+      response: 'Done — here is your edited image.',
       type: 'image_edit',
-      edit_type: 'cut_and_replace',
-      prompt_used: enhancedPrompt,
+      edit_type: 'self_hosted',
+      prompt_used: prompt,
+      image_data: edited,
     });
   } catch (error) {
     console.error('Image edit handler error:', error.message);
@@ -1532,7 +1895,12 @@ async function handleRequest(request, env, ctx) {
     case '/v1/chat':
     case '/api/chat':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);
-      return handleChat(request, env);
+      return handleChat(request, env, ctx);
+
+    case '/v1/chat/stream':
+    case '/api/chat/stream':
+      if (request.method !== 'POST') return respondError('Method not allowed', 405);
+      return handleChatStream(request, env, ctx);
 
     case '/v1/research':
     case '/api/research':
@@ -1623,13 +1991,15 @@ async function handleRequest(request, env, ctx) {
           if (up) { brain = 'up'; break; }
           brain = 'down';
         }
-        const hasAI = !!(env && env.AI && typeof env.AI.run === 'function');
-        const status = search === 'up' && (brain === 'up' || hasAI) ? 'ok' : 'degraded';
+        // Self-hosted only: the brain is the single source of AI truth, so
+        // there is no cloud model to report on any more.
+        const status = search === 'up' && brain === 'up' ? 'ok' : 'degraded';
         return respondJson({
           status,
           search,
           brain,
-          workers_ai: hasAI ? 'up' : 'down',
+          workers_ai: 'removed',
+          self_hosted: true,
           timestamp: Date.now(),
         }, status === 'ok' ? 200 : 503);
       }

@@ -2,22 +2,33 @@ name = "navigwiz-ai"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 
-[ai]
-binding = "AI"
+# NO [ai] binding. Cloudflare Workers AI is a rate-limited, quota'd service.
+# Every model call in this worker is served by the self-hosted Acronous LLM on
+# our own Contabo VPS (free + unlimited). Do not re-add the AI binding.
 
 [vars]
 ENVIRONMENT = "production"
+# qwen3.5 (hybrid Gated-DeltaNet) — measured on the Contabo 4-core CPU box:
+#   qwen3.5:2b  TTFT 0.4-0.6s  ~39 tok/s
+#   qwen3.5:4b  TTFT 1.1-1.7s  ~22 tok/s
+# The worker always sends `think:false`; qwen3.5 defaults to emitting a
+# reasoning block and returns empty content without it.
 CONTABO_LLM_URL = "https://ollama.acronous.com"
-CONTABO_LLM_MODEL = "qwen2.5:3b"
+CONTABO_LLM_MODEL = "qwen3.5:2b"
 CONTABO_LLM_KEY = ""
+# Self-hosted image/video engine on the same VPS (replaces the rate-limited
+# third-party image API this worker used to call).
+EDITOR_SERVICE_URL = "https://image-service.acronous.com"
+# Shared Acronous LLM brain: RAG fast path + human-eval teach-back.
+BRAIN_URL = "https://brain.acronous.com"
+RAG_ENABLED = "true"
 
 # Keep Contabo brain + tunnel warm; scheduled() pings brain every 5 min.
 [triggers]
 crons = ["*/5 * * * *"]
 
 [env.production]
-ai = { binding = "AI" }
-vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://ollama.acronous.com", CONTABO_LLM_MODEL = "qwen2.5:3b", CONTABO_LLM_KEY = "" }
+vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://ollama.acronous.com", CONTABO_LLM_MODEL = "qwen3.5:2b", CONTABO_LLM_KEY = "", EDITOR_SERVICE_URL = "https://image-service.acronous.com", BRAIN_URL = "https://brain.acronous.com", RAG_ENABLED = "true" }
 routes = [
   { pattern = "navigwiz-ai.acronous.com", custom_domain = true },
 ]
