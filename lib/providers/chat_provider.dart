@@ -158,6 +158,9 @@ class ChatProvider extends ChangeNotifier {
       'If it is a document or screenshot, extract and summarize the content. '
       'Otherwise, provide a detailed analysis of what you see.';
 
+  /// Phased status shown while the first streamed token is on its way.
+  static const _chatPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
+
   Future<void> sendMessage(String text, {List<MessageAttachment>? attachments}) async {
     final attach = attachments ?? _pendingAttachments;
     if (text.trim().isEmpty && attach.isEmpty) return;
@@ -173,12 +176,38 @@ class ChatProvider extends ChangeNotifier {
     _currentConversation!.messages.add(userMsg);
     _currentConversation!.updatedAt = DateTime.now();
     if (attachments == null) _pendingAttachments.clear();
+
+    // Streaming placeholder: never an empty dead bubble — phased label first,
+    // live tokens the moment they arrive (shared-brain SSE).
+    final hasAttachments = attach.isNotEmpty;
+    final streamingMsg = (!hasAttachments)
+        ? ChatMessage(role: 'assistant', content: '', isStreaming: true, statusLabel: _chatPhases.first)
+        : null;
+    if (streamingMsg != null) {
+      _currentConversation!.messages.add(streamingMsg);
+    }
     notifyListeners();
 
     const maxAttempts = 3;
     String? lastError;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       try {
+        // Fast path: stream tokens into the placeholder (attempt 0, text-only).
+        if (streamingMsg != null && attempt == 0) {
+          final ok = await _streamIntoPlaceholder(streamingMsg, text);
+          if (ok && streamingMsg.content.isNotEmpty) {
+            streamingMsg.isStreaming = false;
+            streamingMsg.statusLabel = '';
+            _isTakingLong = false;
+            _isLoading = false;
+            _prefs.saveConversations(_conversations).catchError((_) {});
+            notifyListeners();
+            return;
+          }
+          // Stream failed/empty — drop placeholder, fall through to blocking.
+          _currentConversation!.messages.remove(streamingMsg);
+          notifyListeners();
+        }
         final resp = await _callApi(userMsg, text);
         final imageData = resp['image_data'] as String? ?? '';
         final fileData = resp['file_data'] as String? ?? '';
@@ -280,6 +309,37 @@ class ChatProvider extends ChangeNotifier {
     ];
     for (final pat in patterns) { if (t.contains(pat)) return true; }
     return false;
+  }
+
+  /// Streams brain SSE tokens into [placeholder]; returns true when usable
+  /// text arrived. Advances the phased status label while waiting on TTFT.
+  Future<bool> _streamIntoPlaceholder(ChatMessage placeholder, String text) async {
+    final sessionId = _currentConversation?.id;
+    var phaseIdx = 0;
+    final phaseTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+      if (placeholder.content.isEmpty && phaseIdx < _chatPhases.length - 1) {
+        phaseIdx++;
+        placeholder.statusLabel = _chatPhases[phaseIdx];
+        notifyListeners();
+      }
+    });
+    try {
+      var got = false;
+      await for (final delta in _api.chatStream(message: text, sessionId: sessionId)
+          .timeout(const Duration(minutes: 5))) {
+        if (delta.isNotEmpty) {
+          placeholder.content += delta;
+          if (placeholder.statusLabel.isNotEmpty) placeholder.statusLabel = '';
+          got = true;
+          notifyListeners();
+        }
+      }
+      return got;
+    } catch (_) {
+      return placeholder.content.isNotEmpty;
+    } finally {
+      phaseTimer.cancel();
+    }
   }
 
   Future<Map<String, dynamic>> _callApi(ChatMessage userMsg, String text) async {

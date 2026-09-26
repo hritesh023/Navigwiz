@@ -51,8 +51,45 @@ async def sign_out(user: dict = Depends(verify_token)):
     return {"status": "signed_out"}
 
 
+async def _try_shared_brain(message: str, session_id: str | None):
+    """Shared Acronous brain (Contabo VPS) — one RAG memory for Navigwiz +
+    Acronous AI + Equyvo, so every turn trains the same brain (human-eval).
+    Returns the brain text or None (caller falls back to the local LLM)."""
+    import httpx as _httpx
+    base = (os.getenv("ACRONOUS_BRAIN_URL") or "https://brain.acronous.com").rstrip("/")
+    try:
+        async with _httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{base}/v1/chat", json={
+                "message": message,
+                "session_id": session_id or "navigwiz",
+                "source": "navigwiz-backend",
+            })
+        if r.status_code >= 200 and r.status_code < 300:
+            data = r.json()
+            text = (data.get("response") or "").strip()
+            if text:
+                return text
+    except Exception:
+        pass
+    return None
+
+
 @router.post("/chat")
 async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
+    # BRAIN-FIRST: same RAG memory + human-eval loop as Acronous AI.
+    brain_text = await _try_shared_brain(request.message, request.session_id)
+    if brain_text:
+        try:
+            await semantic_memory.remember(
+                user["id"], "conversation",
+                f"Q: {request.message}\nA: {brain_text[:500]}",
+                tags=["chat", "conversation", "shared-brain"])
+        except Exception:
+            pass
+        return ChatResponse(
+            message=brain_text,
+            session_id=request.session_id or str(uuid.uuid4()),
+            sources=[{"type": "shared-brain", "count": 1}])
     context_parts = []
     memory_results = await semantic_memory.recall(user["id"], request.message, 5)
     if memory_results:

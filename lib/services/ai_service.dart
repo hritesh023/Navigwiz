@@ -469,6 +469,49 @@ class AIService extends ChangeNotifier {
     }
   }
 
+  /// SSE token stream from the shared Acronous brain (worker
+  /// /v1/chat/stream → brain /v1/chat/stream). Yields text deltas live so
+  /// the chat bubble paints progressively instead of blocking.
+  Stream<String> askAiStream(String input, {String? sessionId}) async* {
+    if (!AppConfig.hasWorker) return;
+    final req = http.Request('POST', Uri.parse('${AppConfig.workerUrl}/v1/chat/stream'))
+      ..headers['Content-Type'] = 'application/json'
+      ..body = json.encode({'message': input, 'session_id': sessionId ?? 'navigwiz'});
+    http.StreamedResponse streamed;
+    try {
+      streamed = await http.Client().send(req).timeout(const Duration(seconds: 20));
+    } catch (_) {
+      return;
+    }
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      try {
+        await streamed.stream.drain();
+      } catch (_) {}
+      return;
+    }
+    var buf = '';
+    await for (final chunk in streamed.stream.transform(const Utf8Decoder())) {
+      buf += chunk;
+      var idx = buf.indexOf('\n\n');
+      while (idx != -1) {
+        final frame = buf.substring(0, idx).trim();
+        buf = buf.substring(idx + 2);
+        for (final line in frame.split('\n')) {
+          final t = line.trim();
+          if (!t.startsWith('data:')) continue;
+          final payload = t.substring(5).trim();
+          if (payload == '[DONE]') return;
+          try {
+            final obj = json.decode(payload) as Map<String, dynamic>;
+            final c = obj['content'] as String?;
+            if (c != null && c.isNotEmpty) yield c;
+          } catch (_) {}
+        }
+        idx = buf.indexOf('\n\n');
+      }
+    }
+  }
+
   static const Duration _agentTimeout = Duration(minutes: 5);
 
   Future<AgentResponse> sendAgentMessage(

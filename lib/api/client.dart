@@ -47,7 +47,9 @@ class ChatResponse {
   });
 
   factory ChatResponse.fromJson(Map<String, dynamic> json) => ChatResponse(
-    content: json['message'] as String? ?? json['content'] as String? ?? '',
+    // Brain returns {response}, legacy backend returns {message}; accept both
+    // (the old code only read 'message', so brain replies rendered EMPTY).
+    content: json['response'] as String? ?? json['message'] as String? ?? json['content'] as String? ?? '',
     type: json['type'] as String? ?? 'chat',
     sessionId: json['session_id'] as String? ?? '',
     imageBase64: (json['image_base64'] as String?) ?? (json['image_data'] as String?),
@@ -141,11 +143,54 @@ class ApiClient {
     };
     if (attachments != null) body['attachments'] = attachments;
     final resp = await _post('/api/v1/chat', body, timeout: timeout);
-    return ChatResponse(
-      content: resp['message'] as String? ?? '',
-      sessionId: resp['session_id'] as String? ?? sessionId ?? '',
-      type: 'chat',
-    );
+    return ChatResponse.fromJson(resp);
+  }
+
+  /// SSE token stream from the shared brain (via worker /v1/chat/stream).
+  /// Yields text deltas as they arrive so the bubble paints progressively.
+  Stream<String> chatStream({
+    required String message,
+    String? sessionId,
+  }) async* {
+    final req = http.Request('POST', Uri.parse('$_baseUrl/v1/chat/stream'))
+      ..headers.addAll(_headers)
+      ..body = jsonEncode({
+        'message': message,
+        'session_id': sessionId ?? 'default',
+      });
+    http.StreamedResponse streamed;
+    try {
+      streamed = await _client.send(req).timeout(const Duration(seconds: 20));
+    } catch (_) {
+      return;
+    }
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      try {
+        await streamed.stream.drain();
+      } catch (_) {}
+      return;
+    }
+    var buf = '';
+    await for (final bytes in streamed.stream.transform(const Utf8Decoder())) {
+      buf += bytes;
+      var idx = buf.indexOf('\n\n');
+      while (idx != -1) {
+        final frame = buf.substring(0, idx).trim();
+        buf = buf.substring(idx + 2);
+        for (final line in frame.split('\n')) {
+          final t = line.trim();
+          if (!t.startsWith('data:')) continue;
+          final payload = t.substring(5).trim();
+          if (payload == '[DONE]') return;
+          try {
+            final obj = jsonDecode(payload) as Map<String, dynamic>;
+            final c = obj['content'] as String?;
+            if (c != null && c.isNotEmpty) yield c;
+          } catch (_) {}
+        }
+        idx = buf.indexOf('\n\n');
+      }
+    }
   }
 
   Future<ChatResponse> chatWithImage({

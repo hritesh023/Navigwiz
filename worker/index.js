@@ -32,14 +32,59 @@ function respondError(message, status = 500) {
   return respondJson({ response: message, type: 'error' }, status);
 }
 
+// ── Shared Acronous brain (Contabo VPS) — single source of truth ─────────
+// Both Navigwiz and Acronous AI talk to the SAME brain so every turn trains
+// the same RAG memory (human-eval loop). The brain already does capped web
+// search + RAG-first answering internally, so the worker must NOT pre-search
+// here (the old DDG pre-search added seconds before the LLM even started).
+function brainBase(env) {
+  const raw = (env && (env.BRAIN_URL || env.ACRONOUS_BRAIN_URL)) || 'https://brain.acronous.com';
+  return String(raw).replace(/\/$/, '');
+}
+
+async function tryBrainChat(body, env, timeoutMs = 60000) {
+  try {
+    const resp = await fetch(`${brainBase(env)}/v1/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: body.message || body.query || '',
+        messages: body.messages || undefined,
+        session_id: body.session_id || body.sessionId || 'navigwiz',
+        source: 'navigwiz',
+        timezone: body.timezone || undefined,
+        location: body.location || undefined,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    if (!data || typeof data.response !== 'string' || !data.response.trim()) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 async function handleChat(request, env) {
   try {
+    const body = await request.json();
+    const userMessage = body.message || body.query || '';
+
+    // BRAIN-FIRST: one call, RAG + capped search inside. Falls back to the
+    // bundled Workers AI model only when the VPS brain is unreachable.
+    const brain = await tryBrainChat(body, env);
+    if (brain) {
+      return respondJson({
+        response: brain.response,
+        session_id: body.session_id || body.sessionId || '',
+        type: brain.type || 'chat',
+      });
+    }
+
     if (!env || !env.AI || typeof env.AI.run !== 'function') {
       return respondError('AI service not configured on server.', 500);
     }
-
-    const body = await request.json();
-    const userMessage = body.message || body.query || '';
 
     const searchResults = await duckDuckGoApiSearch(userMessage, 5);
     let enhancedMessage = userMessage;
@@ -398,6 +443,40 @@ async function handleRequest(request, env) {
         return respondError('Method not allowed', 405);
       }
       return handleChat(request, env);
+
+    case '/v1/chat/stream':
+      // SSE passthrough to the shared brain — clients render tokens as they
+      // arrive instead of waiting out the whole generation.
+      if (request.method !== 'POST') {
+        return respondError('Method not allowed', 405);
+      }
+      try {
+        const sBody = await request.json();
+        const upstream = await fetch(`${brainBase(env)}/v1/chat/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify({
+            message: sBody.message || sBody.query || '',
+            messages: sBody.messages || undefined,
+            session_id: sBody.session_id || sBody.sessionId || 'navigwiz',
+            source: 'navigwiz',
+            timezone: sBody.timezone || undefined,
+            location: sBody.location || undefined,
+          }),
+        });
+        if (!upstream.ok || !upstream.body) return handleChat(request, env);
+        return new Response(upstream.body, {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          },
+        });
+      } catch {
+        return handleChat(request, env);
+      }
 
     case '/v1/image/generate':
       if (request.method !== 'POST') {

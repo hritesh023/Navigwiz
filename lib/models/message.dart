@@ -25,8 +25,13 @@ class ChatMessage {
   final String fileData;
   final String fileName;
   final String fileType;
+  /// Live-streaming bubble state: while true the UI shows a phased status
+  /// label until tokens arrive, then the flowing text + typing dots.
+  bool isStreaming;
+  String statusLabel;
   ChatMessage({required this.role, required this.content, DateTime? timestamp, List<MessageAttachment>? attachments, String? id,
-    this.imageData = '', this.fileData = '', this.fileName = '', this.fileType = ''})
+    this.imageData = '', this.fileData = '', this.fileName = '', this.fileType = '',
+    this.isStreaming = false, this.statusLabel = ''})
     : timestamp = timestamp ?? DateTime.now(), attachments = attachments ?? [], id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
   Map<String, dynamic> toJson() => {
     'role': role, 'content': content, 'timestamp': timestamp.toIso8601String(),

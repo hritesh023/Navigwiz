@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -36,6 +37,11 @@ class _AgenticChatViewState extends State<AgenticChatView> {
   String? _sessionId;
   bool _isBusy = false;
   bool _listening = false;
+  // Streaming paint: tokens accumulate here and render live; _busyPhase
+  // cycles the reassuring status label while TTFT is still pending.
+  String _streamText = '';
+  int _busyPhase = 0;
+  static const _busyPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
 
   static const Map<String, String> _modeLabels = {
     'auto': 'Chat',
@@ -163,12 +169,20 @@ class _AgenticChatViewState extends State<AgenticChatView> {
     } else if (_mode == 'project') {
       result = await aiService.buildProjectAgent(text);
     } else {
-      result = await aiService.sendAgentMessage(
-        text,
-        mode: _mode == 'auto' ? null : _mode,
-        sessionId: _sessionId,
-      );
-      if (result.sessionId.isNotEmpty) _sessionId = result.sessionId;
+      // STREAM-FIRST: tokens paint live via the shared-brain SSE endpoint.
+      // Falls back to the blocking call only if the stream yields nothing.
+      final streamed = await _streamChat(aiService, text);
+      if (streamed != null) {
+        result = streamed;
+        if (result.sessionId.isNotEmpty) _sessionId = result.sessionId;
+      } else {
+        result = await aiService.sendAgentMessage(
+          text,
+          mode: _mode == 'auto' ? null : _mode,
+          sessionId: _sessionId,
+        );
+        if (result.sessionId.isNotEmpty) _sessionId = result.sessionId;
+      }
     }
 
     final responseText = result.response.isNotEmpty
@@ -191,6 +205,53 @@ class _AgenticChatViewState extends State<AgenticChatView> {
       });
       _scrollToBottom();
     }
+  }
+
+  /// Streams the reply live into [_streamText]; returns an AgentResponse on
+  /// success, null when the stream failed so the caller falls back. The
+  /// phased status label advances every 2.5s until the first token lands.
+  Future<AgentResponse?> _streamChat(AIService aiService, String text) async {
+    _streamText = '';
+    _busyPhase = 0;
+    var gotAny = false;
+    var lastFlush = DateTime.now();
+    // Phase heartbeat while waiting on first token.
+    var phaseTimer = _phaseHeartbeat();
+    try {
+      await for (final delta in aiService.askAiStream(text, sessionId: _sessionId)) {
+        if (delta.isEmpty) continue;
+        gotAny = true;
+        _streamText += delta;
+        // Throttle re-renders: markdown re-parse per token janks on phones.
+        if (DateTime.now().difference(lastFlush).inMilliseconds >= 150) {
+          lastFlush = DateTime.now();
+          if (mounted) setState(() {});
+          _scrollToBottom();
+        }
+      }
+    } catch (_) {
+      gotAny = _streamText.isNotEmpty;
+    } finally {
+      phaseTimer.cancel();
+    }
+    if (mounted) setState(() {});
+    if (!gotAny) {
+      _streamText = '';
+      return null;
+    }
+    final text_ = _streamText;
+    _streamText = '';
+    return AgentResponse(response: text_, sessionId: _sessionId ?? '', mode: 'chat', isSimple: true);
+  }
+
+  /// Advances [_busyPhase] every 2.5s until tokens arrive (cancelled by _streamChat).
+  Timer _phaseHeartbeat() {
+    return Timer.periodic(const Duration(milliseconds: 2500), (t) {
+      if (!mounted || !_isBusy || _streamText.isNotEmpty) return;
+      if (_busyPhase < _busyPhases.length - 1) {
+        setState(() => _busyPhase++);
+      }
+    });
   }
 
   void _openUrl(String url) {
@@ -298,19 +359,32 @@ class _AgenticChatViewState extends State<AgenticChatView> {
       itemCount: _messages.length + (_isBusy ? 1 : 0),
       itemBuilder: (context, index) {
         if (index >= _messages.length) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
+          // Live progress bubble: phased status while TTFT is pending, then
+          // the streamed tokens themselves (never a bare dead spinner).
+          final label = _busyPhases[_busyPhase.clamp(0, _busyPhases.length - 1)];
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 10),
-                  Text('Thinking...', style: TextStyle(fontSize: 13)),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(width: 10),
+                      Text(_streamText.isEmpty ? label : 'Writing…',
+                          style: const TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                  if (_streamText.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    MarkdownBody(text: _streamText, onOpenUrl: _openUrl),
+                  ],
                 ],
               ),
             ),
