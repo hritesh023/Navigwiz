@@ -17,6 +17,7 @@
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
 <meta name="description" content="Navigwiz is an open-source standalone browser with custom Navigwiz search results and Apex Ai.">
   <meta name="keywords" content="Navigwiz, Apex Ai, AI search engine, open source browser">
@@ -36,6 +37,18 @@
 
   <title>Navigwiz</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    /* Full-viewport flexible shell: fills phones, foldables, tablets,
+       desktops and external displays; respects notches/cutouts. */
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    html, body { min-height: 100vh; min-height: 100dvh; width: 100%; }
+    body {
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      overscroll-behavior-y: none;
+      background: #000;
+    }
+  </style>
 </head>
 <body>
   <script>
