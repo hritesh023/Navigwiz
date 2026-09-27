@@ -13,6 +13,7 @@ import 'services/update_service.dart';
 import 'services/service_worker_updater.dart';
 import 'services/window_control_service.dart';
 import 'services/central_auth_service.dart';
+import 'billing/paywall.dart';
 import 'providers/chat_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/workspace_provider.dart';
@@ -57,6 +58,8 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Global paywall → PricingScreen wiring (HTTP 402 anywhere in AI flows).
+  PaywallBus.attach(navigatorKey);
 
   final authService = CentralAuthService();
   final themeService = ThemeService();

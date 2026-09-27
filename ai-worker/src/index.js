@@ -202,6 +202,71 @@ function respondError(message, status = 500) {
   return respondJson({ response: message, type: 'error' }, status);
 }
 
+// ── Subscription gate: agentic AI work requires a Navigwiz plan ─────────
+// Browser search + basic chat stay free. Research / project generation /
+// agentic builds are paid AI work: the caller must hold an active Navigwiz
+// subscription (or the Acronous One bundle). Entitlements live centrally
+// (api.acronous.com); this worker only checks + returns HTTP 402 paywall
+// with upgrade_url so every client lands on the subscription page.
+// Fail-open on network errors: a down central service must not brick the
+// browser — grants are still enforced at payment time + on status refresh.
+const NAV_PLAN_RANK = {
+  nav_ai_starter: 1,
+  nav_ai_plus: 2,
+  nav_ai_pro: 3,
+  nav_ai_ultra: 4,
+};
+const NAV_UPGRADE_URL = 'https://acronous.com/pricing.html#nav';
+
+function bearerToken(request) {
+  try {
+    const h = request.headers.get('Authorization') || '';
+    const m = h.match(/^Bearer\s+(.+)\s*$/);
+    return m ? m[1].trim() : '';
+  } catch { return ''; }
+}
+
+async function navigwizPlanRank(request, env) {
+  const token = bearerToken(request);
+  if (!token) return { rank: 0, plan: null, signedIn: false };
+  const base = (env.BILLING_BASE_URL || 'https://api.acronous.com').replace(/\/$/, '');
+  try {
+    const r = await fetch(`${base}/v1/billing/status?product=navigwiz`, {
+      headers: { Authorization: 'Bearer ' + token },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return { rank: 0, plan: null, signedIn: r.status !== 401, centralDown: r.status >= 500 };
+    const s = await r.json().catch(() => ({}));
+    const subs = s.subscriptions || {};
+    const nav = subs.navigwiz;
+    if (nav && nav.plan && NAV_PLAN_RANK[nav.plan]) {
+      return { rank: NAV_PLAN_RANK[nav.plan], plan: nav.plan, signedIn: true };
+    }
+    if (subs.bundle) return { rank: 2, plan: 'acronous_one', via: 'bundle', signedIn: true };
+    return { rank: 0, plan: null, signedIn: true };
+  } catch {
+    return { rank: 0, plan: null, signedIn: true, centralDown: true };
+  }
+}
+
+// Returns a 402 Response when [minRank] is not met, else null (allowed).
+// Fail-open only when central could not be reached (centralDown).
+async function requireNavigwizPlan(request, env, minRank, feature) {
+  const info = await navigwizPlanRank(request, env);
+  if (info.rank >= minRank) return null;
+  if (info.centralDown) return null;
+  const need = minRank >= 3 ? 'Navigwiz AI Pro (₹699/mo)' : minRank >= 2 ? 'Navigwiz AI Plus (₹299/mo)' : 'Navigwiz AI Starter (₹99/mo)';
+  return respondJson({
+    response: `${feature} is paid AI work and needs ${need}. The browser itself stays free — see ${NAV_UPGRADE_URL}.`,
+    type: 'paywall',
+    error: 'quota_exceeded',
+    kind: 'ai_tasks',
+    product: 'navigwiz',
+    plan_required: minRank >= 3 ? 'nav_ai_pro' : minRank >= 2 ? 'nav_ai_plus' : 'nav_ai_starter',
+    upgrade_url: NAV_UPGRADE_URL,
+  }, 402);
+}
+
 function stripHtml(html) {
   return html
     .replace(/<[^>]*>/g, '')
@@ -1905,16 +1970,28 @@ async function handleRequest(request, env, ctx) {
     case '/v1/research':
     case '/api/research':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);
+      {
+        const gate = await requireNavigwizPlan(request, env, 1, 'AI research');
+        if (gate) return gate;
+      }
       return handleResearch(request, env);
 
     case '/v1/project/generate':
     case '/api/project/generate':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);
+      {
+        const gate = await requireNavigwizPlan(request, env, 2, 'AI project generation');
+        if (gate) return gate;
+      }
       return handleProjectGenerate(request, env);
 
     case '/v1/agent/build':
     case '/api/agent/build':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);
+      {
+        const gate = await requireNavigwizPlan(request, env, 3, 'Agentic builds');
+        if (gate) return gate;
+      }
       return handleAgentBuild(request, env);
 
     case '/v1/image/generate':

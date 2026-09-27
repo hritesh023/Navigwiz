@@ -6,8 +6,10 @@ import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
 import '../models/agent_response.dart';
+import 'central_auth_service.dart';
 import 'logging_service.dart';
 import 'secure_storage_service.dart';
+import '../billing/paywall.dart';
 
 class SearchResult {
   final String title;
@@ -448,15 +450,31 @@ class AIService extends ChangeNotifier {
           ? '${AppConfig.workerUrl}/v1/chat'
           : 'https://acronous.com/v1/chat';
 
+      // Authenticated call: the backend meters per-user AI quotas and
+      // returns HTTP 402 {type:paywall} when the plan allowance is spent.
+      final token = CentralAuthService().token;
       final response = await http.post(
         Uri.parse(apiUrl),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+        },
         body: json.encode({
           'message': extraInstructions != null ? '$extraInstructions\n\nUser: $input' : input,
           'session_id': 'navigwiz',
         }),
       ).timeout(AppConfig.aiResponseTimeout);
 
+      if (response.statusCode == 402) {
+        Map<String, dynamic>? body;
+        try {
+          final d = json.decode(response.body);
+          if (d is Map<String, dynamic>) body = d;
+        } catch (_) {}
+        final pw = PaywallBus.fromBody(body);
+        PaywallBus.handle(pw);
+        return '${pw.message} Opening plans…';
+      }
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = json.decode(response.body);
         final text = decoded['response']?.toString() ?? '';
@@ -540,10 +558,14 @@ class AIService extends ChangeNotifier {
         await Future.delayed(const Duration(milliseconds: 800));
       }
       try {
+        final token = CentralAuthService().token;
         final response = await http
             .post(
               Uri.parse('${AppConfig.workerUrl}/v1/chat'),
-              headers: {'Content-Type': 'application/json'},
+              headers: {
+                'Content-Type': 'application/json',
+                if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+              },
               body: json.encode({
                 'message': message,
                 if (mode != null) 'mode': mode,
@@ -552,6 +574,16 @@ class AIService extends ChangeNotifier {
             )
             .timeout(_agentTimeout);
 
+        if (response.statusCode == 402) {
+          Map<String, dynamic>? body;
+          try {
+            final d = json.decode(response.body);
+            if (d is Map<String, dynamic>) body = d;
+          } catch (_) {}
+          final pw = PaywallBus.fromBody(body);
+          PaywallBus.handle(pw);
+          return AgentResponse(response: pw.message, isSimple: true);
+        }
         if (response.statusCode >= 200 && response.statusCode < 300) {
           final decoded = json.decode(response.body);
           if (decoded is Map<String, dynamic>) {
