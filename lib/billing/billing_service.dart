@@ -128,15 +128,35 @@ class NavigwizBillingService extends ChangeNotifier {
     } on PaymentCancelled {
       return false;
     } catch (e) {
-      error = e.toString().replaceFirst('StateError: ', '');
-      if (error!.startsWith('Exception: ')) {
-        error = error!.substring('Exception: '.length);
-      }
+      error = _friendly(e);
       notifyListeners();
       return false;
     } finally {
       busyPlanId = null;
       notifyListeners();
     }
+  }
+
+  String _friendly(Object e) {
+    if (e is StateError) {
+      final msg = e.message;
+      if (msg.contains('401') || msg.contains('sign in')) {
+        return 'Your session expired. Please sign in again to continue.';
+      }
+      if (msg.contains('402') || msg.contains('quota')) {
+        return 'Quota exceeded. Please upgrade your plan.';
+      }
+      if (msg.contains('503')) {
+        return 'Payments are being switched on. Please try again in a bit.';
+      }
+      if (msg.contains('500') || msg.contains('502')) {
+        return 'Payment service is temporarily unavailable. Please try again.';
+      }
+      return msg;
+    }
+    final m = e.toString().replaceFirst('StateError: ', '');
+    if (m.startsWith('Exception: ')) return m.substring('Exception: '.length);
+    if (m.startsWith('Bad state: ')) return m.substring('Bad state: '.length);
+    return m.isEmpty ? 'Payment failed. Please try again.' : m;
   }
 }
