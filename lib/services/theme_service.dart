@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image/image.dart' as img;
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -29,6 +30,19 @@ class ThemeService extends ChangeNotifier {
   static const int maxDecodeBytes = 12 * 1024 * 1024;
   static const int maxGifSide = 960;
   static const int maxGifFrames = 48;
+
+  /// Extensions Flutter can actually render via Image.memory (Skia codec).
+  /// The picker is restricted to these so users can't select SVG/AVIF/HEIC
+  /// files that would decode in Dart but show as broken in Flutter.
+  static const List<String> supportedImageExtensions = [
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'bmp',
+    'wbmp',
+  ];
 
   ThemeData _lightTheme = _buildDefaultTheme(false);
   ThemeData _darkTheme = _buildDefaultTheme(true);
@@ -113,25 +127,65 @@ class ThemeService extends ChangeNotifier {
   }
 
   Future<void> _loadThemeSettings() async {
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-    _primaryColor =
-        Color(prefs.getInt(_primaryColorKey) ?? Colors.blue.toARGB32());
-    _isDarkMode = prefs.getBool(_isDarkModeKey) ?? true;
-    _backgroundImagePath = prefs.getString(_backgroundImageKey);
-    _backgroundMediaType = prefs.getString(_backgroundTypeKey) ?? 'none';
-    _backgroundZoom = prefs.getDouble(_backgroundZoomKey) ?? 1.0;
-    _backgroundOffsetX = prefs.getDouble(_backgroundOffsetXKey) ?? 0.0;
-    _backgroundOffsetY = prefs.getDouble(_backgroundOffsetYKey) ?? 0.0;
-    final encodedMedia = prefs.getString(_backgroundBytesKey);
-    if (encodedMedia != null && encodedMedia.isNotEmpty) {
       try {
-        _backgroundImageBytes = base64.decode(encodedMedia);
+        _primaryColor =
+            Color(prefs.getInt(_primaryColorKey) ?? Colors.blue.toARGB32());
       } catch (_) {
-        _backgroundImageBytes = null;
-        _backgroundMediaType = 'none';
-        await prefs.remove(_backgroundBytesKey);
+        _primaryColor = Colors.blue;
       }
+      try {
+        _isDarkMode = prefs.getBool(_isDarkModeKey) ?? true;
+      } catch (_) {
+        _isDarkMode = true;
+      }
+      try {
+        _backgroundImagePath = prefs.getString(_backgroundImageKey);
+        _backgroundMediaType =
+            prefs.getString(_backgroundTypeKey) ?? 'none';
+        _backgroundZoom = prefs.getDouble(_backgroundZoomKey) ?? 1.0;
+        _backgroundOffsetX = prefs.getDouble(_backgroundOffsetXKey) ?? 0.0;
+        _backgroundOffsetY = prefs.getDouble(_backgroundOffsetYKey) ?? 0.0;
+      } catch (_) {
+        _backgroundImagePath = null;
+        _backgroundMediaType = 'none';
+        _backgroundZoom = 1.0;
+        _backgroundOffsetX = 0.0;
+        _backgroundOffsetY = 0.0;
+      }
+      String? encodedMedia;
+      try {
+        encodedMedia = prefs.getString(_backgroundBytesKey);
+      } catch (_) {
+        encodedMedia = null;
+      }
+      if (encodedMedia != null && encodedMedia.isNotEmpty) {
+        try {
+          final Uint8List full = base64.decode(encodedMedia);
+          // Drop corrupt/oversized/unsupported payloads instead of keeping
+          // a background that can never render (the old "shows error but
+          // no image" failure).
+          if (full.isEmpty ||
+              full.lengthInBytes > maxBackgroundBytes ||
+              !isSupportedImageBytes(full)) {
+            throw const FormatException('unsupported stored background');
+          }
+          _backgroundImageBytes = full;
+          // Self-heal a stale media-type flag (e.g. gif saved as image).
+          _backgroundMediaType =
+              isGifBytes(_backgroundImageBytes!) ? 'gif' : 'image';
+        } catch (_) {
+          _backgroundImageBytes = null;
+          _backgroundMediaType = 'none';
+          try {
+            await prefs.remove(_backgroundBytesKey);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // prefs itself unavailable — keep in-memory defaults, never crash boot.
     }
 
     _updateTheme();
@@ -152,13 +206,18 @@ class ThemeService extends ChangeNotifier {
   /// Validates + compresses raw picked bytes into quota-safe storage
   /// bytes. Returns exactly what will be saved. Throws a user-friendly
   /// message when the file cannot be used.
-  Future<Uint8List> prepareBackgroundBytes(Uint8List raw) async {
+  Future<Uint8List> prepareBackgroundBytes(Uint8List raw,
+      {String? fileName}) async {
     if (raw.isEmpty) {
       throw ArgumentError('Selected file is empty.');
     }
     if (raw.lengthInBytes > maxDecodeBytes) {
       throw StateError(
-          'That file is too large (${(raw.lengthInBytes / 1048576).toStringAsFixed(1)} MB). Please pick an image/GIF under 10 MB.');
+          'That file is too large (${(raw.lengthInBytes / 1048576).toStringAsFixed(1)} MB). Please pick an image/GIF under 12 MB.');
+    }
+    final unsupported = unsupportedFormatReason(raw, fileName: fileName);
+    if (unsupported != null) {
+      throw StateError(unsupported);
     }
     final Uint8List prepared = isGifBytes(raw)
         ? await _compressGifImage(raw)
@@ -166,6 +225,15 @@ class ThemeService extends ChangeNotifier {
     if (prepared.lengthInBytes > maxBackgroundBytes) {
       throw StateError(
           'That file is still too large (${(prepared.lengthInBytes / 1048576).toStringAsFixed(1)} MB) even after compression. Please pick a smaller image/GIF.');
+    }
+    // Final gate: make sure Flutter's own codec can render what we are
+    // about to save. The `image` package decodes formats (TIFF/TGA/ICO)
+    // that Skia cannot, which used to save successfully and then show a
+    // broken-image icon everywhere ("not working showing error").
+    final renderable = await flutterCanRender(prepared);
+    if (!renderable) {
+      throw StateError(
+          'That file could not be displayed as a background. Please pick a JPG, PNG, GIF or WebP image.');
     }
     return prepared;
   }
@@ -197,8 +265,9 @@ class ThemeService extends ChangeNotifier {
   }
 
   Future<void> setBackgroundImageBytes(Uint8List imageBytes,
-      {String? path}) async {
-    final prepared = await prepareBackgroundBytes(imageBytes);
+      {String? path, String? fileName}) async {
+    final prepared =
+        await prepareBackgroundBytes(imageBytes, fileName: fileName ?? path);
     await applyPreparedBackground(prepared, path: path);
   }
 
@@ -213,6 +282,113 @@ class ThemeService extends ChangeNotifier {
         bytes[5] == 0x61; // a
   }
 
+  static bool _isJpegBytes(Uint8List bytes) {
+    return bytes.lengthInBytes >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF;
+  }
+
+  static bool _isPngBytes(Uint8List bytes) {
+    return bytes.lengthInBytes >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0D &&
+        bytes[5] == 0x0A &&
+        bytes[6] == 0x1A &&
+        bytes[7] == 0x0A;
+  }
+
+  static bool _isWebPBytes(Uint8List bytes) {
+    return bytes.lengthInBytes >= 12 &&
+        bytes[0] == 0x52 && // R
+        bytes[1] == 0x49 && // I
+        bytes[2] == 0x46 && // F
+        bytes[3] == 0x46 && // F
+        bytes[8] == 0x57 && // W
+        bytes[9] == 0x45 && // E
+        bytes[10] == 0x42 && // B
+        bytes[11] == 0x50; // P
+  }
+
+  static bool _isBmpBytes(Uint8List bytes) {
+    return bytes.lengthInBytes >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D;
+  }
+
+  /// True when Flutter's Skia codec can render these bytes (JPEG/PNG/GIF/
+  /// WebP/BMP). Anything else (SVG/AVIF/HEIC/TIFF/ICO/raw text) would save
+  /// fine but show as a broken-image icon — the classic "not working" report.
+  static bool isSupportedImageBytes(Uint8List bytes) {
+    if (bytes.isEmpty) return false;
+    return isGifBytes(bytes) ||
+        _isJpegBytes(bytes) ||
+        _isPngBytes(bytes) ||
+        _isWebPBytes(bytes) ||
+        _isBmpBytes(bytes);
+  }
+
+  /// Friendly reason when [bytes] are not a supported raster image, or null
+  /// when they look fine. Checks magic bytes first (cheap) so text/SVG never
+  /// reaches the expensive decoder.
+  static String? unsupportedFormatReason(Uint8List bytes,
+      {String? fileName}) {
+    if (isSupportedImageBytes(bytes)) return null;
+    final name = (fileName ?? '').toLowerCase();
+    final head = String.fromCharCodes(
+      bytes.take(64).where((b) => b >= 32 && b < 127),
+    ).toLowerCase();
+    if (head.contains('<svg') || head.contains('<!doctype svg')) {
+      return 'SVG files are not supported as backgrounds. Please pick a JPG, PNG, GIF or WebP image.';
+    }
+    if (head.contains('<html') || head.contains('<!doctype html')) {
+      return 'That file is a web page, not an image. Please pick a JPG, PNG, GIF or WebP image.';
+    }
+    if (name.endsWith('.svg')) {
+      return 'SVG files are not supported as backgrounds. Please pick a JPG, PNG, GIF or WebP image.';
+    }
+    if (name.endsWith('.avif')) {
+      return 'AVIF images are not supported on this device yet. Please pick a JPG, PNG, GIF or WebP image.';
+    }
+    if (name.endsWith('.heic') ||
+        name.endsWith('.heif') ||
+        name.endsWith('.tiff') ||
+        name.endsWith('.tif') ||
+        name.endsWith('.ico') ||
+        name.endsWith('.mp4') ||
+        name.endsWith('.mov') ||
+        name.endsWith('.webm') ||
+        name.endsWith('.mp3') ||
+        name.endsWith('.pdf')) {
+      return 'That file type is not supported as a background. Please pick a JPG, PNG, GIF or WebP image.';
+    }
+    // ftyp box => ISO-BMFF (AVIF/HEIC/MP4/MOV) misnamed as image.
+    if (bytes.lengthInBytes >= 12 &&
+        bytes[4] == 0x66 &&
+        bytes[5] == 0x74 &&
+        bytes[6] == 0x79 &&
+        bytes[7] == 0x70) {
+      return 'That file is not a supported image (AVIF/HEIC/video). Please pick a JPG, PNG, GIF or WebP image.';
+    }
+    return 'That file is not a supported image. Please pick a JPG, PNG, GIF or WebP image.';
+  }
+
+  /// Asks Flutter's own image codec whether [bytes] render. Used as the
+  /// final gate before saving so "saved but shows broken icon" can never
+  /// happen. Never throws — returns false on any failure/timeout.
+  static Future<bool> flutterCanRender(Uint8List bytes) async {
+    if (bytes.isEmpty) return false;
+    try {
+      await decodeImageFromList(bytes).timeout(
+        const Duration(seconds: 10),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Reads GIF canvas size straight from the 10-byte header (no full
   /// decode, no frame allocation). Returns null when not a parseable GIF.
   static List<int>? gifDimensions(Uint8List bytes) {
@@ -223,11 +399,13 @@ class ThemeService extends ChangeNotifier {
     return [w, h];
   }
 
-  /// Downscales large static images and re-encodes as JPEG so the stored
-  /// base64 string fits in SharedPreferences/localStorage on every platform.
-  /// Two-pass (1920px/q82, then 1280px/q72) so even noisy phone photos land
-  /// under the quota-safe target. EXIF orientation is baked so portrait
-  /// photos don't show up sideways. GIFs never pass through here.
+  /// Downscales large static images so the stored base64 string fits in
+  /// SharedPreferences/localStorage on every platform. Two-pass
+  /// (1920px/q82, then 1280px/q72) so even noisy phone photos land under
+  /// the quota-safe target. EXIF orientation is baked so portrait photos
+  /// don't show up sideways. Images with transparency are encoded as PNG
+  /// (JPEG has no alpha and would turn transparent areas black). GIFs never
+  /// pass through here.
   Future<Uint8List> _compressStaticImage(Uint8List bytes) async {
     try {
       final decoded = img.decodeImage(bytes);
@@ -247,8 +425,12 @@ class ThemeService extends ChangeNotifier {
           interpolation: img.Interpolation.linear,
         );
       }
-      var out =
-          Uint8List.fromList(img.encodeJpg(working, quality: 82));
+      final bool keepAlpha = working.hasAlpha;
+      Uint8List encodeJpg(img.Image src, int quality) =>
+          Uint8List.fromList(img.encodeJpg(src, quality: quality));
+      Uint8List encodePng(img.Image src) =>
+          Uint8List.fromList(img.encodePng(src));
+      var out = keepAlpha ? encodePng(working) : encodeJpg(working, 82);
       if (out.lengthInBytes > targetBackgroundBytes &&
           (working.width > 1280 || working.height > 1280)) {
         final landscape = working.width >= working.height;
@@ -259,10 +441,10 @@ class ThemeService extends ChangeNotifier {
           interpolation: img.Interpolation.linear,
         );
         final retry =
-            Uint8List.fromList(img.encodeJpg(smaller, quality: 72));
+            keepAlpha ? encodePng(smaller) : encodeJpg(smaller, 72);
         if (retry.lengthInBytes < out.lengthInBytes) out = retry;
       }
-      // If JPEG encoding somehow grew the file, keep the original.
+      // If re-encoding somehow grew the file, keep the original.
       return out.lengthInBytes < bytes.lengthInBytes ? out : bytes;
     } catch (e) {
       debugPrint('Background compress failed, storing original: $e');
@@ -384,16 +566,29 @@ class ThemeService extends ChangeNotifier {
   }
 
   Future<void> _saveThemeSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_primaryColorKey, _primaryColor.toARGB32());
-    await prefs.setBool(_isDarkModeKey, _isDarkMode);
-    await prefs.setString(_backgroundImageKey, _backgroundImagePath ?? '');
-    await prefs.setString(_backgroundTypeKey, _backgroundMediaType);
-    await prefs.setDouble(_backgroundZoomKey, _backgroundZoom);
-    await prefs.setDouble(_backgroundOffsetXKey, _backgroundOffsetX);
-    await prefs.setDouble(_backgroundOffsetYKey, _backgroundOffsetY);
+    SharedPreferences prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (e) {
+      throw StateError(
+          'Could not save settings (storage unavailable). Please try again.');
+    }
+    try {
+      await prefs.setInt(_primaryColorKey, _primaryColor.toARGB32());
+      await prefs.setBool(_isDarkModeKey, _isDarkMode);
+      await prefs.setString(_backgroundImageKey, _backgroundImagePath ?? '');
+      await prefs.setString(_backgroundTypeKey, _backgroundMediaType);
+      await prefs.setDouble(_backgroundZoomKey, _backgroundZoom);
+      await prefs.setDouble(_backgroundOffsetXKey, _backgroundOffsetX);
+      await prefs.setDouble(_backgroundOffsetYKey, _backgroundOffsetY);
+    } catch (_) {
+      // Non-background prefs failing should never block the UI; the
+      // background write below carries its own quota error.
+    }
     if (_backgroundImageBytes == null) {
-      await prefs.remove(_backgroundBytesKey);
+      try {
+        await prefs.remove(_backgroundBytesKey);
+      } catch (_) {}
     } else {
       // On web this writes to localStorage and throws QuotaExceededError
       // when full (rather than returning false) — translate both into one

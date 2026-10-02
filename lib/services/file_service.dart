@@ -49,11 +49,20 @@ class FileService {
     if (result == null) return null;
     final file = result.files.single;
     final ext = file.extension?.toLowerCase() ?? '';
-    if (kIsWeb && file.bytes != null) {
-      return MessageAttachment(name: file.name, path: file.name, type: _inferType(ext), bytes: file.bytes);
+    if (kIsWeb || file.bytes != null) {
+      if (file.bytes != null) {
+        return MessageAttachment(name: file.name, path: file.name, type: _inferType(ext), bytes: file.bytes);
+      }
+      return MessageAttachment(name: file.name, path: file.name, type: _inferType(ext));
     }
-    if (file.path == null) return null;
-    return MessageAttachment(name: file.name, path: file.path!, type: _inferType(ext));
+    String? nativePath;
+    try {
+      nativePath = file.path;
+    } catch (_) {
+      nativePath = null;
+    }
+    if (nativePath == null) return null;
+    return MessageAttachment(name: file.name, path: nativePath, type: _inferType(ext));
   }
 
   static Future<Uint8List> readAttachmentBytes(MessageAttachment att) async {

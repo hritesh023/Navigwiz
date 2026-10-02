@@ -128,66 +128,79 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   void _createWebViewController() {
-    final adBlockEnabled =
-        Provider.of<SettingsProvider>(context, listen: false).adBlockEnabled;
-    _webViewController = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int progress) {
-            final browserService =
-                Provider.of<BrowserService>(context, listen: false);
-            final activeTab = browserService.activeTab;
-            if (activeTab != null &&
-                (progress == 100 ||
-                    progress < activeTab.progress ||
-                    progress - activeTab.progress >= 8)) {
-              browserService.updateTab(
-                activeTab.id,
-                progress: progress,
-                isLoading: progress < 100,
-              );
-            }
-          },
-          onPageStarted: (String url) {
-            final browserService =
-                Provider.of<BrowserService>(context, listen: false);
-            if (browserService.activeTab != null) {
-              browserService.updateTab(
-                browserService.activeTab!.id,
-                url: url,
-                isLoading: true,
-              );
-            }
-          },
-          onPageFinished: (String url) {
-            final browserService =
-                Provider.of<BrowserService>(context, listen: false);
-            if (browserService.activeTab != null) {
-              browserService.updateTab(
-                browserService.activeTab!.id,
-                url: url,
-                isLoading: false,
-                progress: 100,
-              );
-            }
-            if (adBlockEnabled) {
-              _webViewController?.runJavaScript(_adBlockScript);
-            }
-            if (!browserService.isPrivateMode) {
-              Provider.of<MemoryProvider>(context, listen: false).remember(
-                type: 'visit',
-                content: 'Visited: $url',
-                url: url,
-              );
-            }
-          },
-          onWebResourceError: (WebResourceError error) {
-            debugPrint(
-                'WebView error: ${error.description} (code: ${error.errorCode})');
-          },
-        ),
-      );
+    try {
+      final adBlockEnabled =
+          Provider.of<SettingsProvider>(context, listen: false).adBlockEnabled;
+      _webViewController = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onProgress: (int progress) {
+              try {
+                final browserService =
+                    Provider.of<BrowserService>(context, listen: false);
+                final activeTab = browserService.activeTab;
+                if (activeTab != null &&
+                    (progress == 100 ||
+                        progress < activeTab.progress ||
+                        progress - activeTab.progress >= 8)) {
+                  browserService.updateTab(
+                    activeTab.id,
+                    progress: progress,
+                    isLoading: progress < 100,
+                  );
+                }
+              } catch (_) {}
+            },
+            onPageStarted: (String url) {
+              try {
+                final browserService =
+                    Provider.of<BrowserService>(context, listen: false);
+                if (browserService.activeTab != null) {
+                  browserService.updateTab(
+                    browserService.activeTab!.id,
+                    url: url,
+                    isLoading: true,
+                  );
+                }
+              } catch (_) {}
+            },
+            onPageFinished: (String url) {
+              try {
+                final browserService =
+                    Provider.of<BrowserService>(context, listen: false);
+                if (browserService.activeTab != null) {
+                  browserService.updateTab(
+                    browserService.activeTab!.id,
+                    url: url,
+                    isLoading: false,
+                    progress: 100,
+                  );
+                }
+                if (adBlockEnabled) {
+                  _webViewController?.runJavaScript(_adBlockScript);
+                }
+                if (!browserService.isPrivateMode) {
+                  Provider.of<MemoryProvider>(context, listen: false).remember(
+                    type: 'visit',
+                    content: 'Visited: $url',
+                    url: url,
+                  );
+                }
+              } catch (_) {}
+            },
+            onWebResourceError: (WebResourceError error) {
+              debugPrint(
+                  'WebView error: ${error.description} (code: ${error.errorCode})');
+            },
+          ),
+        );
+    } catch (e) {
+      // WebView unavailable (web platform, missing plugin, bad device) —
+      // stay on the home/search UI instead of crashing the browser.
+      debugPrint('WebView controller creation failed: $e');
+      _webViewController = null;
+    }
   }
 
   @override
@@ -609,22 +622,31 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   void _submitHomeSearch(String value) {
-    final query = value.trim();
-    if (query.isEmpty && _homeAttachments.isEmpty) return;
-    if (_homeAttachments.isNotEmpty) {
-      final names =
-          _homeAttachments.map((a) => a.name).join(', ');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Searching with ${ _homeAttachments.length} attachment(s): $names. Open AI Chat or Workspace to analyze files deeply.',
+    try {
+      final query = value.trim();
+      if (query.isEmpty && _homeAttachments.isEmpty) return;
+      if (_homeAttachments.isNotEmpty) {
+        final names =
+            _homeAttachments.map((a) => a.name).join(', ');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Searching with ${ _homeAttachments.length} attachment(s): $names. Open AI Chat or Workspace to analyze files deeply.',
+            ),
+            duration: const Duration(seconds: 3),
           ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
+        );
+      }
+      if (query.isEmpty) return;
+      Provider.of<BrowserService>(context, listen: false).navigateToUrl(query);
+    } catch (e) {
+      debugPrint('Home search failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not start that search.')),
+        );
+      }
     }
-    if (query.isEmpty) return;
-    Provider.of<BrowserService>(context, listen: false).navigateToUrl(query);
   }
 
   /// Thumb-friendly bottom navigation for phones. Replaces the desktop title
@@ -766,14 +788,24 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   Future<void> _togglePrivateMode() async {
-    final browserService =
-        Provider.of<BrowserService>(context, listen: false);
-    final enabling = !browserService.isPrivateMode;
-    browserService.setPrivateMode(enabling);
-    if (!kIsWeb && widget.enableEmbeddedWebView && _webViewController != null) {
-      _createWebViewController();
-      Provider.of<BrowserService>(context, listen: false)
-          .setWebViewController(_webViewController!);
+    try {
+      final browserService =
+          Provider.of<BrowserService>(context, listen: false);
+      final enabling = !browserService.isPrivateMode;
+      browserService.setPrivateMode(enabling);
+      if (!kIsWeb && widget.enableEmbeddedWebView && _webViewController != null) {
+        try {
+          _createWebViewController();
+          if (_webViewController != null) {
+            Provider.of<BrowserService>(context, listen: false)
+                .setWebViewController(_webViewController!);
+          }
+        } catch (e) {
+          debugPrint('Private-mode WebView reset failed: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Toggle private mode failed: $e');
     }
   }
 

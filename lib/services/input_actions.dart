@@ -327,11 +327,22 @@ class InputActions {
       return result.files
           .where((f) => f.name.isNotEmpty)
           .map(
-            (f) => PickedAttachment(
-              name: f.name,
-              path: f.path ?? f.name,
-              size: f.size,
-            ),
+            (f) {
+              // Web-safe: `PlatformFile.path` throws on web.
+              String path = f.name;
+              if (!kIsWeb) {
+                try {
+                  path = f.path ?? f.name;
+                } catch (_) {
+                  path = f.name;
+                }
+              }
+              return PickedAttachment(
+                name: f.name,
+                path: path,
+                size: f.size,
+              );
+            },
           )
           .toList();
     } catch (_) {

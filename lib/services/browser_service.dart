@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:async';
 import 'dart:convert';
 import '../models/browser_tab.dart';
 import '../models/history_entry.dart';
@@ -25,6 +26,7 @@ class BrowserService extends ChangeNotifier {
   // Per-tab navigation history for web platform
   final Map<String, List<String>> _tabHistory = {};
   final Map<String, List<String>> _tabForwardHistory = {};
+  int _tabIdCounter = 0;
 
   List<BrowserTab> get tabs => List.unmodifiable(_tabs);
   int get activeTabIndex => _activeTabIndex;
@@ -120,64 +122,121 @@ class BrowserService extends ChangeNotifier {
   }
 
   Future<void> initialize({String? initialUrl}) async {
-    await _loadBookmarks();
-    await _loadHistory();
-    _createNewTab(url: initialUrl);
+    try {
+      await _loadBookmarks();
+    } catch (e) {
+      debugPrint('Bookmarks load failed: $e');
+      _bookmarks = [];
+    }
+    try {
+      await _loadHistory();
+    } catch (e) {
+      debugPrint('History load failed: $e');
+      _historyEntries.clear();
+    }
+    try {
+      _createNewTab(url: initialUrl);
+    } catch (e) {
+      debugPrint('Initial tab creation failed: $e');
+      // Last-resort: guarantee at least one usable tab so the UI never
+      // renders an empty browser.
+      if (_tabs.isEmpty) {
+        _tabs.add(BrowserTab(
+          id: 'fallback-${DateTime.now().millisecondsSinceEpoch}',
+          url: DomainHelper.getNavigwizDomain(),
+          title: 'Navigwiz',
+        ));
+        _activeTabIndex = 0;
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> _loadBookmarks() async {
-    final prefs = await SharedPreferences.getInstance();
-    _bookmarks = prefs.getStringList('bookmarks') ?? [];
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _bookmarks = prefs.getStringList('bookmarks') ?? [];
+    } catch (_) {
+      _bookmarks = [];
+    }
   }
 
   Future<void> _loadHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    // Preferred store: JSON entries with title + timestamp.
-    final raw = prefs.getString(_historyV2Key);
-    if (raw != null && raw.isNotEmpty) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // Preferred store: JSON entries with title + timestamp.
+      String? raw;
       try {
-        final decoded = jsonDecode(raw) as List;
-        _historyEntries
-          ..clear()
-          ..addAll(decoded
-              .whereType<Map>()
-              .map((m) => HistoryEntry.fromJson(
-                  Map<String, dynamic>.from(m)))
-              .where((e) => e.url.isNotEmpty));
-        return;
+        raw = prefs.getString(_historyV2Key);
       } catch (_) {
-        // Fall through to legacy migration.
+        raw = null;
       }
-    }
-    // One-time migration from the legacy URL-only list.
-    final legacy = prefs.getStringList(_legacyHistoryKey) ?? [];
-    _historyEntries
-      ..clear()
-      ..addAll(legacy
-          .where((u) => u.isNotEmpty)
-          .map((u) => HistoryEntry.fromUrl(u)));
-    if (legacy.isNotEmpty) {
-      await _saveHistory();
+      if (raw != null && raw.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw) as List;
+          _historyEntries
+            ..clear()
+            ..addAll(decoded
+                .whereType<Map>()
+                .map((m) {
+                  try {
+                    return HistoryEntry.fromJson(
+                        Map<String, dynamic>.from(m));
+                  } catch (_) {
+                    return null;
+                  }
+                })
+                .whereType<HistoryEntry>()
+                .where((e) => e.url.isNotEmpty));
+          return;
+        } catch (_) {
+          // Fall through to legacy migration.
+        }
+      }
+      // One-time migration from the legacy URL-only list.
+      List<String> legacy = [];
+      try {
+        legacy = prefs.getStringList(_legacyHistoryKey) ?? [];
+      } catch (_) {}
+      _historyEntries
+        ..clear()
+        ..addAll(legacy
+            .where((u) => u.isNotEmpty)
+            .map((u) => HistoryEntry.fromUrl(u)));
+      if (legacy.isNotEmpty) {
+        await _saveHistory();
+      }
+    } catch (_) {
+      _historyEntries.clear();
     }
   }
 
   Future<void> _saveBookmarks() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('bookmarks', _bookmarks);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('bookmarks', _bookmarks);
+    } catch (e) {
+      debugPrint('Bookmarks save failed: $e');
+    }
   }
 
   Future<void> _saveHistory() async {
-    final prefs = await SharedPreferences.getInstance();
     try {
-      await prefs.setString(_historyV2Key,
-          jsonEncode(_historyEntries.map((e) => e.toJson()).toList()));
-      // Drop the legacy key once migrated so the two stores can't diverge.
-      await prefs.remove(_legacyHistoryKey);
+      final prefs = await SharedPreferences.getInstance();
+      try {
+        await prefs.setString(_historyV2Key,
+            jsonEncode(_historyEntries.map((e) => e.toJson()).toList()));
+        // Drop the legacy key once migrated so the two stores can't diverge.
+        await prefs.remove(_legacyHistoryKey);
+      } catch (_) {}
     } catch (_) {}
   }
 
   void createNewTab({String? url}) {
-    final tabId = DateTime.now().millisecondsSinceEpoch.toString();
+    // Millisecond timestamps collide when tabs are opened rapidly (double
+    // new-tab taps produced duplicate ids and broke per-tab history).
+    final tabId =
+        '${DateTime.now().millisecondsSinceEpoch}-${_tabIdCounter++}';
     final defaultUrl = _homepageUrl.isNotEmpty
         ? _homepageUrl
         : DomainHelper.getNavigwizDomain();
@@ -202,7 +261,22 @@ class BrowserService extends ChangeNotifier {
   }
 
   void closeTab(String tabId) {
-    if (_tabs.length <= 1) return;
+    if (_tabs.isEmpty) return;
+    // Never strand the UI with zero tabs: resetting the last tab home is
+    // safer than ignoring the close (which left users stuck on a dead tab).
+    if (_tabs.length <= 1) {
+      final only = _tabs.first;
+      if (only.id == tabId) {
+        _tabHistory[only.id] = [DomainHelper.getNavigwizDomain()];
+        _tabForwardHistory[only.id] = [];
+        updateTab(only.id,
+            url: DomainHelper.getNavigwizDomain(),
+            title: 'Navigwiz',
+            isLoading: false,
+            progress: 100);
+      }
+      return;
+    }
 
     final index = _tabs.indexWhere((tab) => tab.id == tabId);
     if (index != -1) {
@@ -213,14 +287,16 @@ class BrowserService extends ChangeNotifier {
         _activeTabIndex = _tabs.length - 1;
       }
       notifyListeners();
+      unawaited(_loadActiveTabInWebView());
     }
   }
 
   void switchToTab(int index) {
     if (index >= 0 && index < _tabs.length) {
+      if (_activeTabIndex == index) return;
       _activeTabIndex = index;
       notifyListeners();
-      _loadActiveTabInWebView();
+      unawaited(_loadActiveTabInWebView());
     }
   }
 
@@ -338,22 +414,35 @@ class BrowserService extends ChangeNotifier {
 
   void setWebViewController(WebViewController controller) {
     _webViewController = controller;
-    _loadActiveTabInWebView();
+    unawaited(_loadActiveTabInWebView());
     notifyListeners();
   }
 
   Future<void> _loadActiveTabInWebView() async {
-    final url = activeTab?.url ?? '';
-    if (_webViewController == null ||
-        url.isEmpty ||
-        DomainHelper.isNavigwizDomain(url)) {
-      return;
+    try {
+      final url = activeTab?.url ?? '';
+      if (_webViewController == null ||
+          url.isEmpty ||
+          DomainHelper.isNavigwizDomain(url)) {
+        return;
+      }
+      final uri = _safeParseUri(url);
+      if (uri == null) return;
+      await _webViewController!.loadRequest(uri);
+    } catch (e) {
+      // A bad URL or a dead controller must never crash the browser.
+      debugPrint('Load tab in WebView failed: $e');
     }
-    await _webViewController!.loadRequest(Uri.parse(url));
   }
 
   Future<void> navigateToUrl(String url) async {
-    final normalizedUrl = _normalizeUrl(url);
+    String normalizedUrl;
+    try {
+      normalizedUrl = _normalizeUrl(url);
+    } catch (e) {
+      debugPrint('Normalize URL failed for "$url": $e');
+      normalizedUrl = DomainHelper.getNavigwizSearchUrl(url);
+    }
     final tab = activeTab;
     final isInternalNavigwizUrl =
         DomainHelper.isNavigwizDomain(normalizedUrl);
@@ -379,16 +468,68 @@ class BrowserService extends ChangeNotifier {
     }
 
     if (kIsWeb) {
-      final uri = Uri.parse(normalizedUrl);
-      await launchUrl(uri, webOnlyWindowName: '_blank');
-      if (tab != null) {
-        updateTab(tab.id, isLoading: false, progress: 100);
+      try {
+        final uri = _safeParseUri(normalizedUrl);
+        if (uri == null) {
+          if (tab != null) {
+            updateTab(tab.id, isLoading: false, progress: 100);
+          }
+          return;
+        }
+        final launched =
+            await launchUrl(uri, webOnlyWindowName: '_blank').timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => false,
+        );
+        if (!launched) {
+          debugPrint('launchUrl refused for $normalizedUrl');
+        }
+      } catch (e) {
+        debugPrint('External navigation failed for $normalizedUrl: $e');
+      } finally {
+        if (tab != null) {
+          updateTab(tab.id, isLoading: false, progress: 100);
+        }
       }
       return;
     }
 
     if (_webViewController != null) {
-      await _webViewController!.loadRequest(Uri.parse(normalizedUrl));
+      try {
+        final uri = _safeParseUri(normalizedUrl);
+        if (uri == null) {
+          updateTab(tab!.id, isLoading: false, progress: 100);
+          return;
+        }
+        await _webViewController!.loadRequest(uri);
+      } catch (e) {
+        debugPrint('WebView load failed for $normalizedUrl: $e');
+        if (tab != null) {
+          updateTab(tab.id, isLoading: false, progress: 100);
+        }
+      }
+    }
+  }
+
+  /// Lenient URI parse that never throws: returns null for garbage instead
+  /// of crashing navigation. Internal Navigwiz pseudo-URLs
+  /// ("Navigwiz Search: ...") intentionally return null — callers must treat
+  /// them as internal and never pass them to Uri/ WebView.
+  Uri? _safeParseUri(String url) {
+    if (url.isEmpty || DomainHelper.isNavigwizDomain(url)) return null;
+    try {
+      final uri = Uri.parse(url);
+      if (!uri.hasScheme) return null;
+      if (uri.scheme != 'http' &&
+          uri.scheme != 'https' &&
+          uri.scheme != 'file' &&
+          uri.scheme != 'about' &&
+          uri.scheme != 'data') {
+        return null;
+      }
+      return uri;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -450,8 +591,14 @@ class BrowserService extends ChangeNotifier {
 
   Future<void> goBack() async {
     if (!kIsWeb && _webViewController != null) {
-      if (await _webViewController!.canGoBack()) {
-        await _webViewController!.goBack();
+      try {
+        if (await _webViewController!
+            .canGoBack()
+            .timeout(const Duration(seconds: 5), onTimeout: () => false)) {
+          await _webViewController!.goBack();
+        }
+      } catch (e) {
+        debugPrint('WebView goBack failed: $e');
       }
       return;
     }
@@ -477,8 +624,14 @@ class BrowserService extends ChangeNotifier {
 
   Future<void> goForward() async {
     if (!kIsWeb && _webViewController != null) {
-      if (await _webViewController!.canGoForward()) {
-        await _webViewController!.goForward();
+      try {
+        if (await _webViewController!
+            .canGoForward()
+            .timeout(const Duration(seconds: 5), onTimeout: () => false)) {
+          await _webViewController!.goForward();
+        }
+      } catch (e) {
+        debugPrint('WebView goForward failed: $e');
       }
       return;
     }
@@ -502,24 +655,40 @@ class BrowserService extends ChangeNotifier {
   }
 
   Future<void> reload() async {
-    if (DomainHelper.isNavigwizDomain(activeTab?.url)) {
-      _reloadNonce++;
-      notifyListeners();
-      return;
-    }
+    try {
+      if (DomainHelper.isNavigwizDomain(activeTab?.url)) {
+        _reloadNonce++;
+        notifyListeners();
+        return;
+      }
 
-    if (!kIsWeb && _webViewController != null) {
-      await _webViewController!.reload();
-      return;
-    }
+      if (!kIsWeb && _webViewController != null) {
+        try {
+          await _webViewController!
+              .reload()
+              .timeout(const Duration(seconds: 10));
+        } catch (e) {
+          debugPrint('WebView reload failed: $e');
+        }
+        return;
+      }
 
-    final tab = activeTab;
-    if (tab == null) return;
+      final tab = activeTab;
+      if (tab == null) return;
 
-    final url = tab.url;
-    if (url.isNotEmpty && !DomainHelper.isNavigwizDomain(url)) {
-      final uri = Uri.parse(url);
-      await launchUrl(uri, webOnlyWindowName: '_blank');
+      final url = tab.url;
+      if (url.isNotEmpty && !DomainHelper.isNavigwizDomain(url)) {
+        try {
+          final uri = _safeParseUri(url);
+          if (uri == null) return;
+          await launchUrl(uri, webOnlyWindowName: '_blank')
+              .timeout(const Duration(seconds: 10), onTimeout: () => false);
+        } catch (e) {
+          debugPrint('Reload launch failed for $url: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Reload failed: $e');
     }
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -62,13 +63,27 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
     if (result != null) {
       for (final file in result.files) {
-        if (file.path != null) {
+        // Web-safe: `PlatformFile.path` throws on web — use bytes/name.
+        String? nativePath;
+        if (!kIsWeb) {
+          try {
+            nativePath = file.path;
+          } catch (_) {
+            nativePath = null;
+          }
+        }
+        final labelPath = nativePath ?? file.name;
+        if (kIsWeb && (file.bytes == null || file.bytes!.isEmpty)) {
+          continue;
+        }
+        if (!kIsWeb && nativePath == null) continue;
+        {
           final ext = file.name.split('.').last;
           setState(() {
             _pendingAttachments.add(Attachment(
               id: 'att_${DateTime.now().millisecondsSinceEpoch}_${_pendingAttachments.length}',
               name: file.name,
-              path: file.path!,
+              path: labelPath,
               type: type == AttachmentType.image
                   ? AttachmentType.image
                   : type == AttachmentType.video

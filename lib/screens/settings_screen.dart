@@ -1,8 +1,9 @@
-import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
+import '../services/background_picker.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/browser_service.dart';
@@ -507,7 +508,7 @@ class SettingsScreen extends StatelessWidget {
                                                     zoom: zoom,
                                                     offsetX: offsetX,
                                                     offsetY: offsetY);
-                                            if (context.mounted) {
+      if (context.mounted) {
                                               ScaffoldMessenger.of(context)
                                                   .showSnackBar(const SnackBar(
                                                       content: Text(
@@ -766,33 +767,66 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  /// Equyvo-style background pick: browser data-URL read on web (no
+  /// `file_picker`, no throwing `.path`), validated + compressed into the
+  /// user's local storage via [ThemeService].
   Future<void> _pickBackgroundImage(BuildContext context, bool isGif) async {
     final themeService = Provider.of<ThemeService>(context, listen: false);
-    final result = await FilePicker.platform.pickFiles(
-      type: isGif ? FileType.custom : FileType.image,
-      allowedExtensions: isGif ? ['gif'] : null,
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    Uint8List? bytes = file.bytes;
-    if (bytes == null && file.path != null) {
-      try {
-        bytes = await File(file.path!).readAsBytes();
-      } catch (_) {}
+    final messenger = ScaffoldMessenger.of(context);
+    late final PickedBackground? picked;
+    try {
+      picked = await pickBackgroundImage(gifOnly: isGif);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.toString().replaceFirst(
+          RegExp(r'^(Exception|StateError|ArgumentError):\s*'), ''))));
+      return;
     }
-    if (bytes == null) return;
-    final picked = bytes;
+    if (picked == null) return; // user cancelled
+    final bytes = picked.bytes;
+    if (bytes.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not read that file.')),
+      );
+      return;
+    }
+    if (isGif && !ThemeService.isGifBytes(bytes)) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('That file is not a GIF. Please pick a real .gif file.'),
+        ),
+      );
+      return;
+    }
+    Uint8List prepared;
+    try {
+      prepared = await themeService.prepareBackgroundBytes(
+        bytes,
+        fileName: picked.name,
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.toString().replaceFirst(
+          RegExp(r'^(Exception|StateError|ArgumentError):\s*'), ''))));
+      return;
+    }
+    final label = picked.name;
     if (!context.mounted) return;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => BackgroundCropDialog(
-        bytes: picked,
+        bytes: prepared,
         onApply: (zoom, offsetX, offsetY) async {
-          await themeService.setBackgroundImageBytes(picked, path: file.path);
-          await themeService.setBackgroundFraming(
-              zoom: zoom, offsetX: offsetX, offsetY: offsetY);
+          try {
+            await themeService.applyPreparedBackground(prepared, path: label);
+            await themeService.setBackgroundFraming(
+                zoom: zoom, offsetX: offsetX, offsetY: offsetY);
+          } catch (e) {
+            messenger.showSnackBar(SnackBar(
+                content: Text(e.toString().replaceFirst(
+                    RegExp(r'^(Exception|StateError|ArgumentError):\s*'),
+                    ''))));
+            return;
+          }
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Background applied')),
@@ -810,6 +844,15 @@ class SettingsScreen extends StatelessWidget {
     if (result != null && result.files.isNotEmpty) {
       final file = result.files.first;
       final nameController = TextEditingController(text: file.name);
+      // Web-safe: `PlatformFile.path` throws on web — fall back to name.
+      String extPath = file.name;
+      if (!kIsWeb) {
+        try {
+          extPath = file.path ?? file.name;
+        } catch (_) {
+          extPath = file.name;
+        }
+      }
 
       if (context.mounted) {
         showDialog(
@@ -832,7 +875,7 @@ class SettingsScreen extends StatelessWidget {
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
               FilledButton(
                 onPressed: () {
-                  sp.addExtension(nameController.text.trim(), file.path ?? '');
+                  sp.addExtension(nameController.text.trim(), extPath);
                   Navigator.pop(ctx);
                 },
                 child: const Text('Add'),
