@@ -195,7 +195,31 @@ Never say 'I'm based on...' or 'I'm powered by...' or 'I'm built on...'.
 If someone asks about your model, training, or technical details, deflect naturally: "I'm Acronous AI — what can I help you with?"
 Never claim your knowledge is outdated or that you have a knowledge cutoff. Use the current date/time and provided context when available to answer time-sensitive questions accurately.
 Every response must be original — never use pre-written or templated answers.
+ACCURACY — answer ONLY what the user asked, nothing more: no preamble, no restatement of the question, no capability lists, no "great question", no unrelated background. If web results are provided, ground every factual claim in them and cite by URL. Never invent versions, dates, names, prices or numbers — if unverifiable, say so in one line.
 Code: write code ONLY when the user explicitly asks for it. Then write clean, complete, runnable code in fenced blocks with language tags — and keep comments minimal by default: NO comments on obvious lines, one short comment only where the logic is genuinely tricky.`;
+
+// ── CPU-friendly chat response cache (no GPU needed for speed) ───────────
+// Identical questions within 90s reuse the last answer instantly instead of
+// paying another full CPU generation. Bounded (200 entries) so edge memory
+// stays flat. Only caches short chat answers, never research/project/image.
+const CHAT_CACHE = new Map();
+const CHAT_CACHE_TTL_MS = 90000;
+function chatCacheGet(key) {
+  const hit = CHAT_CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CHAT_CACHE_TTL_MS) { CHAT_CACHE.delete(key); return null; }
+  return hit.value;
+}
+function chatCacheSet(key, value) {
+  if (CHAT_CACHE.size >= 200) {
+    const oldest = CHAT_CACHE.keys().next().value;
+    CHAT_CACHE.delete(oldest);
+  }
+  CHAT_CACHE.set(key, { at: Date.now(), value });
+}
+function chatCacheKey(message, mode) {
+  return ((mode || 'chat') + '::' + String(message || '').trim().toLowerCase().slice(0, 500));
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -1444,6 +1468,15 @@ async function handleChatStream(request, env, ctx) {
 
   async function* generate() {
     const tGen = Date.now();
+    // CPU-friendly cache: identical short chats reuse instantly (no model).
+    if (prep.mode === 'chat' && userMessage.length <= 300) {
+      const cached = chatCacheGet(chatCacheKey(userMessage, prep.mode));
+      if (cached) {
+        full.push(cached);
+        yield cached;
+        return;
+      }
+    }
     // RAG fast path first - no model needed when memory is confident.
     try {
       const hit = await brainAnswer(env, userMessage, 1200);
@@ -1506,6 +1539,10 @@ async function handleChatStream(request, env, ctx) {
         const answer = full.join('');
         if (answer) {
           brainLearn(ctx, env, { text: answer, query: userMessage, session_id: sessionId });
+          // Cache short chat answers so repeats are instant on CPU.
+          if (answer.length <= 2000 && userMessage.length <= 300) {
+            chatCacheSet(chatCacheKey(userMessage, prep.mode), answer);
+          }
         }
       },
     });
@@ -2079,7 +2116,7 @@ async function handleRequest(request, env, ctx) {
 
     case '/v1/image/generate':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);
-      return handleImage(request);
+      return handleImage(request, env);
 
     case '/v1/image/edit':
       if (request.method !== 'POST') return respondError('Method not allowed', 405);

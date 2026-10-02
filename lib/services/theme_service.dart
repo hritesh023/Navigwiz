@@ -145,11 +145,14 @@ class ThemeService extends ChangeNotifier {
       throw ArgumentError('Selected file is empty.');
     }
     final isGif = _isGifBytes(imageBytes);
-    final Uint8List prepared =
-        isGif ? imageBytes : await _compressStaticImage(imageBytes);
+    // GIFs are often 3-10MB (animation frames). Downscale oversized GIFs
+    // instead of rejecting them so user uploads of their choice succeed.
+    final Uint8List prepared = isGif
+        ? await _compressGifImage(imageBytes)
+        : await _compressStaticImage(imageBytes);
     if (prepared.lengthInBytes > maxBackgroundBytes) {
       throw StateError(
-          'That file is too large (${(prepared.lengthInBytes / 1048576).toStringAsFixed(1)} MB). Please pick an image/GIF under 2 MB.');
+          'That file is still too large (${(prepared.lengthInBytes / 1048576).toStringAsFixed(1)} MB) even after compression. Please pick an image/GIF under 2 MB.');
     }
 
     _backgroundImageBytes = prepared;
@@ -209,6 +212,53 @@ class ThemeService extends ChangeNotifier {
       return out.lengthInBytes < bytes.lengthInBytes ? out : bytes;
     } catch (e) {
       debugPrint('Background compress failed, storing original: $e');
+      return bytes;
+    }
+  }
+
+  /// Downscales oversized GIFs frame-by-frame (preserving animation) so
+  /// user-chosen GIFs fit in SharedPreferences/localStorage. Small GIFs
+  /// pass through untouched. Returns original bytes on any decode failure.
+  Future<Uint8List> _compressGifImage(Uint8List bytes) async {
+    try {
+      if (bytes.lengthInBytes <= maxBackgroundBytes) {
+        // Still check dimensions — huge-dimension GIFs blow up memory.
+        final probe = img.decodeGif(bytes);
+        if (probe == null) return bytes;
+        final tooBig = probe.frames.any((f) =>
+            f.width > maxBackgroundDimension ||
+            f.height > maxBackgroundDimension);
+        if (!tooBig) return bytes;
+      }
+      final gif = img.decodeGif(bytes);
+      if (gif == null || gif.frames.isEmpty) return bytes;
+      // Target: longest side <= 1280 for backgrounds (balance size/quality).
+      const targetSide = 1280;
+      final first = gif.frames.first;
+      final scale = targetSide /
+          (first.width >= first.height ? first.width : first.height);
+      if (scale >= 1.0 && bytes.lengthInBytes <= maxBackgroundBytes * 2) {
+        return bytes;
+      }
+      final effectiveScale = scale.clamp(0.25, 1.0);
+      for (var i = 0; i < gif.frames.length; i++) {
+        final frame = gif.frames[i];
+        final nw = (frame.width * effectiveScale).round().clamp(1, targetSide);
+        final nh = (frame.height * effectiveScale).round().clamp(1, targetSide);
+        if (nw != frame.width || nh != frame.height) {
+          gif.frames[i] = img.copyResize(frame, width: nw, height: nh);
+        }
+        // Cap frame count for very long GIFs (keeps size under quota).
+        if (gif.frames.length > 60 && i >= 60) break;
+      }
+      if (gif.frames.length > 60) {
+        gif.frames.removeRange(60, gif.frames.length);
+      }
+      final encoded = img.encodeGif(gif);
+      final out = Uint8List.fromList(encoded);
+      return out.lengthInBytes < bytes.lengthInBytes ? out : bytes;
+    } catch (e) {
+      debugPrint('GIF compress failed, storing original: $e');
       return bytes;
     }
   }

@@ -1,6 +1,6 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
@@ -445,12 +445,12 @@ class CustomizationPanel extends StatelessWidget {
   }
 
   Future<Uint8List?> _readBytes(PlatformFile file) async {
-    if (file.bytes != null) return file.bytes;
-    if (file.path != null) {
-      try {
-        return await File(file.path!).readAsBytes();
-      } catch (_) {}
-    }
+    // Web: FilePicker returns bytes directly (path is null, dart:io
+    // is unavailable). Mobile/desktop: withData:true also populates
+    // bytes, so no File I/O is needed — keeps this panel web-safe.
+    if (file.bytes != null && file.bytes!.isNotEmpty) return file.bytes;
+    // Extremely old cached path without bytes: cannot use dart:io on web.
+    if (kIsWeb) return null;
     return null;
   }
 }

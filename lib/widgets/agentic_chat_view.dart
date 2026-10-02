@@ -42,7 +42,11 @@ class _AgenticChatViewState extends State<AgenticChatView> {
   // cycles the reassuring status label while TTFT is still pending.
   String _streamText = '';
   int _busyPhase = 0;
+  DateTime? _busyStart;
+  // Honest base stages for streaming chat: connecting → waiting → streaming.
+  // The bubble sticks on the last stage; elapsed seconds prove it's alive.
   static const _busyPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
+  static const _streamingLabel = 'Streaming answer…';
   // Honest staged labels for the blocking modes (research / project / image
   // don't stream — the bubble cycles these stage names instead of sitting on
   // one frozen line). They name pipeline stages, never fake percentages.
@@ -168,6 +172,9 @@ class _AgenticChatViewState extends State<AgenticChatView> {
       ));
       _attachments.clear();
       _isBusy = true;
+      _busyStart = DateTime.now();
+      _streamText = '';
+      _busyPhase = 0;
     });
     _scrollToBottom();
 
@@ -221,6 +228,12 @@ class _AgenticChatViewState extends State<AgenticChatView> {
     modeTimer?.cancel();
     _activePhases = _busyPhases;
 
+    if (mounted) {
+      setState(() {
+        _busyStart = null;
+      });
+    }
+
     final responseText = result.response.isNotEmpty
         ? result.response
         : result.project != null
@@ -245,10 +258,12 @@ class _AgenticChatViewState extends State<AgenticChatView> {
 
   /// Streams the reply live into [_streamText]; returns an AgentResponse on
   /// success, null when the stream failed so the caller falls back. The
-  /// phased status label advances every 2.5s until the first token lands.
+  /// phased status label advances every 2.5s until the first token lands,
+  /// then the UI switches to an honest "Streaming…" state.
   Future<AgentResponse?> _streamChat(AIService aiService, String text) async {
     _streamText = '';
     _busyPhase = 0;
+    _busyStart ??= DateTime.now();
     var gotAny = false;
     var lastFlush = DateTime.now();
     // Phase heartbeat while waiting on first token.
@@ -283,7 +298,8 @@ class _AgenticChatViewState extends State<AgenticChatView> {
   /// Advances [_busyPhase] every 2.5s while the brain is still working
   /// (cancelled by the caller when the result lands). Sticks on the last
   /// stage rather than looping — looping would imply progress that isn't
-  /// real. The bubble itself cross-fades between the stage names.
+  /// real. Once streamed tokens arrive the bubble switches to "Streaming…"
+  /// instead of pretending to still be thinking.
   Timer _phaseHeartbeat() {
     return Timer.periodic(const Duration(milliseconds: 2500), (t) {
       if (!mounted || !_isBusy) return;
@@ -401,10 +417,20 @@ class _AgenticChatViewState extends State<AgenticChatView> {
       itemCount: _messages.length + (_isBusy ? 1 : 0),
       itemBuilder: (context, index) {
         if (index >= _messages.length) {
-          // Live progress bubble: phased status while TTFT is pending, then
-          // the streamed tokens themselves (never a bare dead spinner).
+          // HONEST progress: stage names only (never fake %), live elapsed
+          // seconds, and a real Cancel. While tokens stream, the bubble
+          // switches to "Streaming…" so it never claims to still be thinking.
+          final isStreaming = _streamText.isNotEmpty;
           final phases = _activePhases;
-          final label = phases[_busyPhase.clamp(0, phases.length - 1)];
+          final stageLabel = isStreaming
+              ? _streamingLabel
+              : phases[_busyPhase.clamp(0, phases.length - 1)];
+          // Show all honest stages as a checklist so users see the full
+          // pipeline (not just 1-2 tasks): done = earlier stages, active =
+          // current, pending = later.
+          final stageIdx = isStreaming
+              ? phases.length // all stages done, now streaming
+              : _busyPhase.clamp(0, phases.length - 1);
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Align(
@@ -413,9 +439,98 @@ class _AgenticChatViewState extends State<AgenticChatView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   AiLoadingBubble(
-                    label: label,
-                    phases: phases,
-                    initialPhase: _busyPhase.clamp(0, phases.length - 1),
+                    label: stageLabel,
+                    phases: isStreaming
+                        ? [_streamingLabel]
+                        : phases,
+                    initialPhase: isStreaming
+                        ? 0
+                        : _busyPhase.clamp(0, phases.length - 1),
+                    startedAt: _busyStart,
+                  ),
+                  const SizedBox(height: 8),
+                  // Honest stage checklist: every pipeline step visible.
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (var i = 0; i < phases.length; i++)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: i < stageIdx
+                                ? theme.colorScheme.primary
+                                    .withValues(alpha: 0.15)
+                                : i == stageIdx && !isStreaming
+                                    ? theme.colorScheme.primaryContainer
+                                        .withValues(alpha: 0.5)
+                                    : theme.colorScheme.surfaceContainerHighest
+                                        .withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: theme.colorScheme.outline
+                                  .withValues(alpha: 0.25),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                i < stageIdx || isStreaming
+                                    ? Icons.check_circle
+                                    : i == stageIdx
+                                        ? Icons.hourglass_top
+                                        : Icons.radio_button_unchecked,
+                                size: 12,
+                                color: i < stageIdx || isStreaming
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                phases[i].replaceAll('…', ''),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: i == stageIdx && !isStreaming
+                                      ? FontWeight.w700
+                                      : FontWeight.w400,
+                                  color:
+                                      theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (isStreaming)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primaryContainer
+                                .withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 10,
+                                height: 10,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor:
+                                      AlwaysStoppedAnimation<Color>(
+                                          theme.colorScheme.primary),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Text('Streaming',
+                                  style: TextStyle(fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
                   if (_streamText.isNotEmpty) ...[
                     const SizedBox(height: 8),
