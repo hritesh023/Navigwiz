@@ -319,9 +319,12 @@ class InputActions {
 
   static Future<List<PickedAttachment>> pickFiles(FileType type) async {
     try {
+      // Wiki rule: read `file.bytes` (withData: true); never `file.path`
+      // on web — the getter throws "use bytes instead".
       final result = await FilePicker.platform.pickFiles(
         type: type,
         allowMultiple: true,
+        withData: true,
       );
       if (result == null) return const [];
       return result.files

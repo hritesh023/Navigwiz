@@ -31,15 +31,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _pickAttachment(AttachmentType type) async {
     FilePickerResult? result;
+    // Wiki rule: bytes must come from `file.bytes` (withData: true) —
+    // `file.path` is unavailable on web.
     switch (type) {
       case AttachmentType.image:
-        result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: true);
+        result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: true, withData: true);
         break;
       case AttachmentType.video:
-        result = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true);
+        result = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true, withData: true);
         break;
       case AttachmentType.audio:
-        result = await FilePicker.platform.pickFiles(type: FileType.audio, allowMultiple: true);
+        result = await FilePicker.platform.pickFiles(type: FileType.audio, allowMultiple: true, withData: true);
         break;
       case AttachmentType.folder:
         final path = await FilePicker.platform.getDirectoryPath();
@@ -59,7 +61,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         _showLinkDialog();
         return;
       default:
-        result = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.any);
+        result = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.any, withData: true);
     }
     if (result != null) {
       for (final file in result.files) {

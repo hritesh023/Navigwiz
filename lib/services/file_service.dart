@@ -42,9 +42,12 @@ class FileService {
   }
 
   Future<MessageAttachment?> pickFile({List<String>? allowedExtensions}) async {
+    // Wiki rule: bytes via withData (defaults true only on web, so set it
+    // explicitly); `file.path` is never touched on web.
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: allowedExtensions ?? _defaultExtensions,
+      withData: true,
     );
     if (result == null) return null;
     final file = result.files.single;
