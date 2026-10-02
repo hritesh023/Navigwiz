@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/background_file_reader.dart';
 import '../services/theme_service.dart';
 import 'color_picker_dialog.dart';
 import 'background_crop_dialog.dart';
@@ -327,8 +327,8 @@ class CustomizationPanel extends StatelessWidget {
         withData: true,
       );
       if (result == null || result.files.isEmpty) return;
-      final bytes = await _readBytes(result.files.first);
-      if (bytes == null || bytes.isEmpty) {
+      final raw = await _readBytes(result.files.first);
+      if (raw == null || raw.isEmpty) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Could not read that file.')),
@@ -337,10 +337,10 @@ class CustomizationPanel extends StatelessWidget {
         return;
       }
       if (context.mounted) {
-        await _showCropAndApply(
+        await _prepareAndCrop(
           context,
           themeService,
-          bytes,
+          raw,
           path: result.files.first.path ?? result.files.first.name,
           kindLabel: 'Background',
         );
@@ -364,8 +364,8 @@ class CustomizationPanel extends StatelessWidget {
         withData: true,
       );
       if (result == null || result.files.isEmpty) return;
-      final bytes = await _readBytes(result.files.first);
-      if (bytes == null || bytes.isEmpty) {
+      final raw = await _readBytes(result.files.first);
+      if (raw == null || raw.isEmpty) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Could not read that GIF.')),
@@ -374,10 +374,10 @@ class CustomizationPanel extends StatelessWidget {
         return;
       }
       if (context.mounted) {
-        await _showCropAndApply(
+        await _prepareAndCrop(
           context,
           themeService,
-          bytes,
+          raw,
           path: result.files.first.path ?? result.files.first.name,
           kindLabel: 'Animated background',
         );
@@ -391,6 +391,42 @@ class CustomizationPanel extends StatelessWidget {
     }
   }
 
+  /// Compresses FIRST, then previews: the crop dialog shows exactly what
+  /// will be saved, so a preview that renders but a save that fails (quota
+  /// errors, oversized GIFs) can no longer disagree with each other.
+  Future<void> _prepareAndCrop(
+    BuildContext context,
+    ThemeService themeService,
+    Uint8List raw, {
+    required String path,
+    required String kindLabel,
+  }) async {
+    final navigator = Navigator.of(context);
+    // Big GIFs can take a few seconds to downscale on web — show progress
+    // first (the heavy work below blocks the UI thread once started).
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    late final Uint8List prepared;
+    try {
+      prepared = await themeService.prepareBackgroundBytes(raw);
+    } finally {
+      try {
+        if (navigator.canPop()) navigator.pop();
+      } catch (_) {}
+    }
+    if (!context.mounted) return;
+    await _showCropAndApply(
+      context,
+      themeService,
+      prepared,
+      path: path,
+      kindLabel: kindLabel,
+    );
+  }
+
   Future<void> _showCropAndApply(
     BuildContext context,
     ThemeService themeService,
@@ -398,13 +434,15 @@ class CustomizationPanel extends StatelessWidget {
     required String path,
     required String kindLabel,
   }) async {
+    // [bytes] must already be prepared (quota-safe) via prepareBackgroundBytes
+    // so the dialog previews exactly what Apply will save.
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => BackgroundCropDialog(
         bytes: bytes,
         onApply: (zoom, offsetX, offsetY) async {
-          await themeService.setBackgroundImageBytes(bytes, path: path);
+          await themeService.applyPreparedBackground(bytes, path: path);
           await themeService.setBackgroundFraming(
               zoom: zoom, offsetX: offsetX, offsetY: offsetY);
           if (context.mounted) {
@@ -445,13 +483,16 @@ class CustomizationPanel extends StatelessWidget {
   }
 
   Future<Uint8List?> _readBytes(PlatformFile file) async {
-    // Web: FilePicker returns bytes directly (path is null, dart:io
-    // is unavailable). Mobile/desktop: withData:true also populates
-    // bytes, so no File I/O is needed — keeps this panel web-safe.
+    // Preferred: bytes straight from the picker (works on web + desktop).
     if (file.bytes != null && file.bytes!.isNotEmpty) return file.bytes;
-    // Extremely old cached path without bytes: cannot use dart:io on web.
-    if (kIsWeb) return null;
-    return null;
+    // Native fallback: the picker sometimes returns only a path (large
+    // files, platform quirks). Web-safe — the io implementation is only
+    // linked on platforms with dart:io, otherwise this returns null.
+    try {
+      return await readBackgroundFileBytes(file.path);
+    } catch (_) {
+      return null;
+    }
   }
 }
 

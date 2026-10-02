@@ -14,11 +14,21 @@ class ThemeService extends ChangeNotifier {
   static const String _primaryColorKey = 'primary_color';
   static const String _isDarkModeKey = 'is_dark_mode';
 
-  /// Max stored background size. SharedPreferences on web uses localStorage
-  /// (~5MB quota), so base64-encoded media must stay well under that limit
-  /// or the save silently fails and the background "does not show up".
+  /// Hard cap on stored background size. SharedPreferences on web uses
+  /// localStorage (~5MB quota shared with every other pref) and base64
+  /// inflates bytes by ~33%, so anything above this risks quota errors and
+  /// the background "does not show up".
   static const int maxBackgroundBytes = 2500000;
   static const int maxBackgroundDimension = 1920;
+  /// Quota-safe target: compressed outputs aim well under the hard cap so
+  /// the base64 string (~target x 1.37) fits comfortably alongside other
+  /// prefs on web localStorage.
+  static const int targetBackgroundBytes = 1500000;
+  /// Refuse to decode files larger than this (OOM guard on web: decoding
+  /// allocates width x height x 4 per frame).
+  static const int maxDecodeBytes = 12 * 1024 * 1024;
+  static const int maxGifSide = 960;
+  static const int maxGifFrames = 48;
 
   ThemeData _lightTheme = _buildDefaultTheme(false);
   ThemeData _darkTheme = _buildDefaultTheme(true);
@@ -139,29 +149,45 @@ class ThemeService extends ChangeNotifier {
     _updateTheme();
   }
 
-  Future<void> setBackgroundImageBytes(Uint8List imageBytes,
-      {String? path}) async {
-    if (imageBytes.isEmpty) {
+  /// Validates + compresses raw picked bytes into quota-safe storage
+  /// bytes. Returns exactly what will be saved. Throws a user-friendly
+  /// message when the file cannot be used.
+  Future<Uint8List> prepareBackgroundBytes(Uint8List raw) async {
+    if (raw.isEmpty) {
       throw ArgumentError('Selected file is empty.');
     }
-    final isGif = _isGifBytes(imageBytes);
-    // GIFs are often 3-10MB (animation frames). Downscale oversized GIFs
-    // instead of rejecting them so user uploads of their choice succeed.
-    final Uint8List prepared = isGif
-        ? await _compressGifImage(imageBytes)
-        : await _compressStaticImage(imageBytes);
+    if (raw.lengthInBytes > maxDecodeBytes) {
+      throw StateError(
+          'That file is too large (${(raw.lengthInBytes / 1048576).toStringAsFixed(1)} MB). Please pick an image/GIF under 10 MB.');
+    }
+    final Uint8List prepared = isGifBytes(raw)
+        ? await _compressGifImage(raw)
+        : await _compressStaticImage(raw);
     if (prepared.lengthInBytes > maxBackgroundBytes) {
       throw StateError(
-          'That file is still too large (${(prepared.lengthInBytes / 1048576).toStringAsFixed(1)} MB) even after compression. Please pick an image/GIF under 2 MB.');
+          'That file is still too large (${(prepared.lengthInBytes / 1048576).toStringAsFixed(1)} MB) even after compression. Please pick a smaller image/GIF.');
     }
+    return prepared;
+  }
 
+  /// Persists bytes produced by [prepareBackgroundBytes] (no recompression,
+  /// so the preview the user approved is exactly what gets saved).
+  Future<void> applyPreparedBackground(Uint8List prepared,
+      {String? path}) async {
+    if (prepared.isEmpty) {
+      throw ArgumentError('Selected file is empty.');
+    }
+    if (prepared.lengthInBytes > maxBackgroundBytes) {
+      throw StateError(
+          'That file is too large. Please pick a smaller image/GIF.');
+    }
     _backgroundImageBytes = prepared;
     _backgroundImagePath = path;
     _backgroundZoom = 1.0;
     _backgroundOffsetX = 0.0;
     _backgroundOffsetY = 0.0;
     // Preserve the gif type so the UI can render it animated.
-    _backgroundMediaType = isGif ? 'gif' : 'image';
+    _backgroundMediaType = isGifBytes(prepared) ? 'gif' : 'image';
     // NOTE: the user's chosen accent color is intentionally left alone —
     // silently re-tinting the whole browser on every background change
     // surprised users (it looked like the apply "did something wrong").
@@ -170,8 +196,14 @@ class ThemeService extends ChangeNotifier {
     _updateTheme();
   }
 
+  Future<void> setBackgroundImageBytes(Uint8List imageBytes,
+      {String? path}) async {
+    final prepared = await prepareBackgroundBytes(imageBytes);
+    await applyPreparedBackground(prepared, path: path);
+  }
+
   /// GIF magic bytes: GIF87a or GIF89a.
-  bool _isGifBytes(Uint8List bytes) {
+  static bool isGifBytes(Uint8List bytes) {
     if (bytes.lengthInBytes < 6) return false;
     return bytes[0] == 0x47 && // G
         bytes[1] == 0x49 && // I
@@ -181,33 +213,55 @@ class ThemeService extends ChangeNotifier {
         bytes[5] == 0x61; // a
   }
 
+  /// Reads GIF canvas size straight from the 10-byte header (no full
+  /// decode, no frame allocation). Returns null when not a parseable GIF.
+  static List<int>? gifDimensions(Uint8List bytes) {
+    if (bytes.lengthInBytes < 10 || !isGifBytes(bytes)) return null;
+    final w = bytes[6] | (bytes[7] << 8);
+    final h = bytes[8] | (bytes[9] << 8);
+    if (w <= 0 || h <= 0 || w > 10000 || h > 10000) return null;
+    return [w, h];
+  }
+
   /// Downscales large static images and re-encodes as JPEG so the stored
   /// base64 string fits in SharedPreferences/localStorage on every platform.
-  /// GIFs are never passed through here (animation must be preserved).
+  /// Two-pass (1920px/q82, then 1280px/q72) so even noisy phone photos land
+  /// under the quota-safe target. EXIF orientation is baked so portrait
+  /// photos don't show up sideways. GIFs never pass through here.
   Future<Uint8List> _compressStaticImage(Uint8List bytes) async {
     try {
-      // Small enough already — store as-is.
-      if (bytes.lengthInBytes <= maxBackgroundBytes) {
-        final probe = img.decodeImage(bytes);
-        if (probe == null ||
-            (probe.width <= maxBackgroundDimension &&
-                probe.height <= maxBackgroundDimension)) {
-          return bytes;
-        }
-      }
-      final image = img.decodeImage(bytes);
-      if (image == null) return bytes;
-      img.Image resized = image;
-      if (image.width > maxBackgroundDimension ||
-          image.height > maxBackgroundDimension) {
-        resized = img.copyResize(
-          image,
-          width: image.width >= image.height ? maxBackgroundDimension : null,
-          height: image.height > image.width ? maxBackgroundDimension : null,
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      img.Image oriented = decoded;
+      try {
+        oriented = img.bakeOrientation(decoded);
+      } catch (_) {}
+      img.Image working = oriented;
+      if (working.width > maxBackgroundDimension ||
+          working.height > maxBackgroundDimension) {
+        final landscape = working.width >= working.height;
+        working = img.copyResize(
+          working,
+          width: landscape ? maxBackgroundDimension : null,
+          height: landscape ? null : maxBackgroundDimension,
+          interpolation: img.Interpolation.linear,
         );
       }
-      final encoded = img.encodeJpg(resized, quality: 85);
-      final out = Uint8List.fromList(encoded);
+      var out =
+          Uint8List.fromList(img.encodeJpg(working, quality: 82));
+      if (out.lengthInBytes > targetBackgroundBytes &&
+          (working.width > 1280 || working.height > 1280)) {
+        final landscape = working.width >= working.height;
+        final smaller = img.copyResize(
+          working,
+          width: landscape ? 1280 : null,
+          height: landscape ? null : 1280,
+          interpolation: img.Interpolation.linear,
+        );
+        final retry =
+            Uint8List.fromList(img.encodeJpg(smaller, quality: 72));
+        if (retry.lengthInBytes < out.lengthInBytes) out = retry;
+      }
       // If JPEG encoding somehow grew the file, keep the original.
       return out.lengthInBytes < bytes.lengthInBytes ? out : bytes;
     } catch (e) {
@@ -216,51 +270,87 @@ class ThemeService extends ChangeNotifier {
     }
   }
 
-  /// Downscales oversized GIFs frame-by-frame (preserving animation) so
-  /// user-chosen GIFs fit in SharedPreferences/localStorage. Small GIFs
-  /// pass through untouched. Returns original bytes on any decode failure.
+  /// Shrinks oversized GIFs while preserving animation so user-chosen
+  /// GIFs fit in SharedPreferences/localStorage. Small GIFs pass through
+  /// untouched WITHOUT a full decode (header check only — decoding allocates
+  /// width x height x 4 bytes per frame). Long GIFs are evenly sampled
+  /// (full story kept) instead of truncated. Returns original bytes on any
+  /// decode failure so the caller can report size honestly.
   Future<Uint8List> _compressGifImage(Uint8List bytes) async {
     try {
-      if (bytes.lengthInBytes <= maxBackgroundBytes) {
-        // Still check dimensions — huge-dimension GIFs blow up memory.
-        final probe = img.decodeGif(bytes);
-        if (probe == null) return bytes;
-        final tooBig = probe.frames.any((f) =>
-            f.width > maxBackgroundDimension ||
-            f.height > maxBackgroundDimension);
-        if (!tooBig) return bytes;
-      }
-      final gif = img.decodeGif(bytes);
-      if (gif == null || gif.frames.isEmpty) return bytes;
-      // Target: longest side <= 1280 for backgrounds (balance size/quality).
-      const targetSide = 1280;
-      final first = gif.frames.first;
-      final scale = targetSide /
-          (first.width >= first.height ? first.width : first.height);
-      if (scale >= 1.0 && bytes.lengthInBytes <= maxBackgroundBytes * 2) {
+      final dims = gifDimensions(bytes);
+      if (dims != null &&
+          bytes.lengthInBytes <= targetBackgroundBytes &&
+          dims[0] <= 1280 &&
+          dims[1] <= 1280) {
         return bytes;
       }
-      final effectiveScale = scale.clamp(0.25, 1.0);
-      for (var i = 0; i < gif.frames.length; i++) {
-        final frame = gif.frames[i];
-        final nw = (frame.width * effectiveScale).round().clamp(1, targetSide);
-        final nh = (frame.height * effectiveScale).round().clamp(1, targetSide);
-        if (nw != frame.width || nh != frame.height) {
-          gif.frames[i] = img.copyResize(frame, width: nw, height: nh);
+      final gif = img.decodeGif(bytes);
+      if (gif == null || gif.numFrames == 0) return bytes;
+      // Iterative shrink: each pass samples fewer frames at a smaller size
+      // (from the ORIGINAL decode, never re-compressing a compressed pass).
+      // Typical GIFs fit on pass 1; only pathological files loop further.
+      // copyResize resizes every frame of an animated image at once and
+      // keeps per-frame durations.
+      var side = maxGifSide;
+      var frameCap = maxGifFrames;
+      var sampling = 20;
+      Uint8List best = bytes;
+      for (var attempt = 0; attempt < 4; attempt++) {
+        img.Image working = gif;
+        if (working.numFrames > frameCap) {
+          working = sampleGifFrames(working, frameCap);
         }
-        // Cap frame count for very long GIFs (keeps size under quota).
-        if (gif.frames.length > 60 && i >= 60) break;
+        final maxSide = working.width >= working.height
+            ? working.width
+            : working.height;
+        if (maxSide > side) {
+          final landscape = working.width >= working.height;
+          working = img.copyResize(
+            working,
+            width: landscape ? side : null,
+            height: landscape ? null : side,
+          );
+        }
+        final encoded =
+            img.encodeGif(working, samplingFactor: sampling);
+        final out = Uint8List.fromList(encoded);
+        if (out.lengthInBytes < best.lengthInBytes) best = out;
+        if (best.lengthInBytes <= targetBackgroundBytes) break;
+        // Tighten for the next pass (floors keep results usable).
+        side = (side * 0.7).round().clamp(320, maxGifSide);
+        frameCap = (frameCap * 2 ~/ 3).clamp(12, maxGifFrames);
+        sampling = 30;
+        if (side <= 320 && frameCap <= 12) break;
       }
-      if (gif.frames.length > 60) {
-        gif.frames.removeRange(60, gif.frames.length);
-      }
-      final encoded = img.encodeGif(gif);
-      final out = Uint8List.fromList(encoded);
-      return out.lengthInBytes < bytes.lengthInBytes ? out : bytes;
+      // Never return something bigger than what we were given.
+      return best.lengthInBytes < bytes.lengthInBytes ? best : bytes;
     } catch (e) {
       debugPrint('GIF compress failed, storing original: $e');
       return bytes;
     }
+  }
+
+  /// Evenly samples [maxFrames] frames from an animated image so long GIFs
+  /// keep their full story instead of being cut off after the first N
+  /// frames. Frame durations, loop count and type are preserved.
+  static img.Image sampleGifFrames(img.Image gif, int maxFrames) {
+    final total = gif.numFrames;
+    if (total <= maxFrames) return gif;
+    img.Image? out;
+    final step = total / maxFrames;
+    for (var i = 0; i < maxFrames; i++) {
+      final idx = (i * step).floor().clamp(0, total - 1);
+      final single = img.Image.from(gif.frames[idx], noAnimation: true);
+      if (out == null) {
+        out = single;
+      } else {
+        out.addFrame(single);
+      }
+    }
+    out!.frameType = gif.frameType;
+    out.loopCount = gif.loopCount;
+    return out;
   }
 
   Future<void> setBackgroundVideoBytes(Uint8List videoBytes,
@@ -305,13 +395,20 @@ class ThemeService extends ChangeNotifier {
     if (_backgroundImageBytes == null) {
       await prefs.remove(_backgroundBytesKey);
     } else {
-      // May throw on web when localStorage quota is exceeded — callers
-      // surface this to the user instead of failing silently.
-      final ok = await prefs.setString(
-          _backgroundBytesKey, base64.encode(_backgroundImageBytes!));
-      if (!ok) {
+      // On web this writes to localStorage and throws QuotaExceededError
+      // when full (rather than returning false) — translate both into one
+      // friendly message instead of leaking the raw platform error.
+      try {
+        final ok = await prefs.setString(
+            _backgroundBytesKey, base64.encode(_backgroundImageBytes!));
+        if (!ok) {
+          throw StateError(
+              'Could not save background (storage full). Try a smaller image or GIF.');
+        }
+      } catch (e) {
+        if (e is StateError) rethrow;
         throw StateError(
-            'Could not save background (storage full). Try a smaller image.');
+            'Could not save background (storage full). Try a smaller image or GIF.');
       }
     }
   }
