@@ -566,6 +566,18 @@ function isSimpleQuery(query) {
   return isShort && isQuestion && (hasSimplePattern || onlyLetters);
 }
 
+// Stable-knowledge explanations ("explain X", "what is X", "how does X
+// work") live in the model's weights. Searching the news for them returns
+// fresh-but-irrelevant snippets that hijack the answer (e.g. "explain
+// photosynthesis" answered with forest-research news instead of the
+// definition). These skip web search unless time markers are present.
+function isStableKnowledgeQuery(query) {
+  const m = String(query || '');
+  if (!/^(explain|define|describe|what\s+is|what\s+are|how\s+does|how\s+do|why\s+is|why\s+are|tell\s+me\s+about)\b/i.test(m.trim())) return false;
+  if (/\b(news|latest|current|today|tonight|yesterday|election|war|protest|crisis|score|price|weather|president|prime\s+minister|chief\s+minister|minister|mayor|governor|version|release|update)\b/i.test(m)) return false;
+  return true;
+}
+
 // Greetings and sign-offs. isSimpleQuery() needs a "?" so it classified "hi"
 // as a full question, which triggered a 2s web search and a 700-token budget
 // for a one-line reply. This is the most frequent interaction in the browser,
@@ -1283,7 +1295,10 @@ async function prepareChat(body, env) {
   // 2s serial search before the first token defeats the purpose.
   let searchResults = [];
   const searchCapMs = body.stream === true ? 1200 : 2000;
-  const wantsWeb = !greeting && (mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false));
+  // Stable-knowledge explanations skip web search: news snippets hijack the
+  // answer with fresh-but-irrelevant facts (see isStableKnowledgeQuery).
+  const wantsWeb = !greeting && !isStableKnowledgeQuery(userMessage) &&
+    (mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false));
   if (wantsWeb) {
     const found = await withTimeout(searchFromWeb(userMessage, 8, env), searchCapMs).catch(() => []);
     searchResults = found || [];
@@ -1521,7 +1536,10 @@ async function handleChat(request, env, ctx) {
     let searchResults = [];
     let searchSuggestions = [];
     const greeting = isGreetingMessage(userMessage);
-    const wantsWeb = !greeting && (mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false));
+    // Stable-knowledge explanations skip web search: news snippets hijack
+    // the answer with fresh-but-irrelevant facts (see isStableKnowledgeQuery).
+    const wantsWeb = !greeting && !isStableKnowledgeQuery(userMessage) &&
+      (mode === 'web_search' || (!isSimple && env.SEARCH_ENABLED !== false));
 
     // Time-sensitive asks bypass memory by definition (memory is not "current").
     const timeSensitive = /\b(latest|current|today|now|right\s+now|this\s+(?:week|month|year)|news|score|price|weather|who\s+is\s+the)\b/i.test(userMessage);
