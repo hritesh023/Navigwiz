@@ -159,16 +159,9 @@ class ThemeService extends ChangeNotifier {
     _backgroundOffsetY = 0.0;
     // Preserve the gif type so the UI can render it animated.
     _backgroundMediaType = isGif ? 'gif' : 'image';
-
-    if (!isGif) {
-      // Extract dominant color only for static images. Decoding an animated
-      // GIF here is expensive and can fail, which previously left the
-      // background unset with no error shown to the user.
-      final dominantColor = _extractDominantColor(prepared);
-      if (dominantColor != null) {
-        _primaryColor = dominantColor;
-      }
-    }
+    // NOTE: the user's chosen accent color is intentionally left alone —
+    // silently re-tinting the whole browser on every background change
+    // surprised users (it looked like the apply "did something wrong").
 
     await _saveThemeSettings();
     _updateTheme();
@@ -236,47 +229,6 @@ class ThemeService extends ChangeNotifier {
     _backgroundMediaType = 'none';
     await _saveThemeSettings();
     _updateTheme();
-  }
-
-  Color? _extractDominantColor(Uint8List bytes) {
-    try {
-      final image = img.decodeImage(bytes);
-
-      if (image != null) {
-        // Simple color extraction - sample pixels from center area
-        final centerX = image.width ~/ 2;
-        final centerY = image.height ~/ 2;
-        const sampleSize = 50;
-
-        int r = 0, g = 0, b = 0;
-        int count = 0;
-
-        for (int y = centerY - sampleSize; y < centerY + sampleSize; y++) {
-          for (int x = centerX - sampleSize; x < centerX + sampleSize; x++) {
-            if (x >= 0 && x < image.width && y >= 0 && y < image.height) {
-              final pixel = image.getPixel(x, y);
-              r += pixel.r.toInt();
-              g += pixel.g.toInt();
-              b += pixel.b.toInt();
-              count++;
-            }
-          }
-        }
-
-        if (count > 0) {
-          return Color.fromARGB(
-            255,
-            (r ~/ count).toInt(),
-            (g ~/ count).toInt(),
-            (b ~/ count).toInt(),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('Error extracting dominant color: $e');
-    }
-
-    return null;
   }
 
   void _updateTheme() {

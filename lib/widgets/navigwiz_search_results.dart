@@ -397,14 +397,7 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
   }
 
   Widget _shimmerLine(ThemeData theme, double width) {
-    return Container(
-      width: width,
-      height: 12,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(6),
-      ),
-    );
+    return _ShimmerLine(width: width);
   }
 
   Widget _buildAiEmpty(ThemeData theme) {
@@ -723,5 +716,62 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
     if (diff.inDays < 30) return '${(diff.inDays / 7).floor()}w ago';
     if (diff.inDays < 365) return '${(diff.inDays / 30).floor()}mo ago';
     return dt.year.toString();
+  }
+}
+
+/// Animated shimmer placeholder line: a soft highlight sweeps across so the
+/// AI Overview skeleton visibly "breathes" instead of sitting as dead grey
+/// bars while the brain works.
+class _ShimmerLine extends StatefulWidget {
+  final double width;
+  const _ShimmerLine({required this.width});
+
+  @override
+  State<_ShimmerLine> createState() => _ShimmerLineState();
+}
+
+class _ShimmerLineState extends State<_ShimmerLine>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1500),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final base = cs.surfaceContainerHighest;
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        return Container(
+          width: widget.width,
+          height: 12,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                base,
+                cs.primary.withValues(alpha: 0.22),
+                base,
+              ],
+              stops: [
+                (_ctrl.value - 0.35).clamp(0.0, 1.0),
+                _ctrl.value.clamp(0.0, 1.0),
+                (_ctrl.value + 0.35).clamp(0.0, 1.0),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 }

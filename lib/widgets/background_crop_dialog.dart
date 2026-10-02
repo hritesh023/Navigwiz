@@ -30,6 +30,7 @@ class _BackgroundCropDialogState extends State<BackgroundCropDialog> {
   late double _offsetX;
   late double _offsetY;
   bool _applying = false;
+  String? _error;
 
   @override
   void initState() {
@@ -111,6 +112,26 @@ class _BackgroundCropDialogState extends State<BackgroundCropDialog> {
                   style: TextStyle(
                       fontSize: 12,
                       color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.error_outline,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.error),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -124,10 +145,26 @@ class _BackgroundCropDialogState extends State<BackgroundCropDialog> {
                     onPressed: _applying
                         ? null
                         : () async {
-                            setState(() => _applying = true);
-                            await widget.onApply(_zoom, _offsetX, _offsetY);
-                            if (!mounted) return;
-                            Navigator.pop(context);
+                            final navigator = Navigator.of(context);
+                            setState(() {
+                              _applying = true;
+                              _error = null;
+                            });
+                            try {
+                              await widget.onApply(
+                                  _zoom, _offsetX, _offsetY);
+                              navigator.pop();
+                            } catch (e) {
+                              // Surface the failure (too large / storage
+                              // full) instead of wedging on "Applying…".
+                              if (!mounted) return;
+                              setState(() {
+                                _applying = false;
+                                _error = e
+                                    .toString()
+                                    .replaceFirst(RegExp(r'^.*?: '), '');
+                              });
+                            }
                           },
                     icon: const Icon(Icons.check, size: 18),
                     label: Text(_applying ? 'Applying…' : 'Apply'),

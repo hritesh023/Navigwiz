@@ -267,15 +267,11 @@ class _ResearchScreenState extends State<ResearchScreen> {
       'Extracting key findings',
       'Writing the report',
     ];
-    final activeStep = rp.currentProgress.toLowerCase().contains('planning')
-        ? 0
-        : rp.currentProgress.toLowerCase().contains('search')
-            ? 1
-            : rp.currentProgress.toLowerCase().contains('analyz')
-                ? 2
-                : rp.currentProgress.toLowerCase().contains('finding')
-                    ? 3
-                    : 4;
+    // Maps every progress string the provider actually emits (both the
+    // agent path — "Planning…", "Found N sources — analyzing…" — and the
+    // fallback path — "Searching…", "Analyzing…", "Extracting…") onto a
+    // step, so the checklist visibly advances instead of freezing on step 0.
+    final activeStep = _researchStepFor(rp.currentProgress);
 
     return Center(
       child: SingleChildScrollView(
@@ -371,6 +367,30 @@ class _ResearchScreenState extends State<ResearchScreen> {
         ),
       ),
     );
+  }
+
+  /// Step index (0-4) for a provider progress string. 'complete'/'failed'/
+  /// 'cancelled' resolve past the last step so every circle checks off.
+  int _researchStepFor(String progress) {
+    final p = progress.toLowerCase();
+    if (p.contains('complete') ||
+        p.contains('fail') ||
+        p.contains('cancel')) {
+      return 5;
+    }
+    if (p.contains('writ') || p.contains('report') || p.contains('insight')) {
+      return 4;
+    }
+    if (p.contains('extract') ||
+        p.contains('finding') ||
+        p.contains('generat')) {
+      return 3;
+    }
+    if (p.contains('analyz') || p.contains('found ') || p.contains('sources —')) {
+      return 2;
+    }
+    if (p.contains('search')) return 1;
+    return 0;
   }
 
   Widget _buildReport(ResearchProvider rp, ThemeData theme) {

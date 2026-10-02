@@ -54,14 +54,17 @@ function ollamaOptions(numPredict, temperature) {
   );
 }
 
-// Generation budget per turn. At ~22-39 tok/s on CPU, 700 tokens is already
-// 20-30s of decode; the old 2048/3072/4096 caps only invited runaway loops.
+// Generation budget per turn. Small budgets cut answers off mid-sentence,
+// which users read as broken/hallucinating — so these are generous on
+// purpose. The model stops at EOS on its own; a bigger cap only costs time
+// on genuinely long answers. Repeat-penalty guardrails + the per-request
+// watchdog (not the cap) are what stop runaway loops.
 function generationBudget(message, isSimple) {
-  if (isSimple) return 220;
+  if (isSimple) return 512;
   const t = String(message || '');
-  if (!t.trim()) return 150;
-  if (t.length > 400) return 600;
-  return 400;
+  if (!t.trim()) return 256;
+  if (t.length > 400) return 2048;
+  return 1024;
 }
 
 // ── Prompt budget ─────────────────────────────────────────────────────────
@@ -407,7 +410,11 @@ async function callContabo(env, messages, maxTokens, temperature, jsonMode, mode
           stream: false,
           keep_alive: '24h',
           think: false,
-          options: ollamaOptions(Math.min(maxTokens, 1200), temperature),
+          // Cap only guards the non-streaming path against a degenerate
+          // loop pinning the 4-core box; normal answers stop at EOS first.
+          // Must stay >= the largest generationBudget() tier (2048) or
+          // long answers get cut off mid-sentence.
+          options: ollamaOptions(Math.min(maxTokens, 3072), temperature),
         }),
       }, 60000);
       if (resp && resp.ok) {
@@ -479,7 +486,7 @@ async function* streamContabo(env, messages, maxTokens, temperature, model) {
 async function callLLM({
   env,
   messages,
-  maxTokens = 700,
+  maxTokens = 1024,
   temperature = 0.7,
   jsonMode = false,
   model,

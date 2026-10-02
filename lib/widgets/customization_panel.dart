@@ -228,7 +228,9 @@ class CustomizationPanel extends StatelessWidget {
 
   Widget _buildBackgroundActions(
       BuildContext context, ThemeService themeService) {
+    final hasMedia = themeService.hasBackgroundMedia;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
@@ -249,8 +251,30 @@ class CustomizationPanel extends StatelessWidget {
             ),
           ],
         ),
-        if (themeService.hasBackgroundMedia) ...[
-          const SizedBox(height: 8),
+        const SizedBox(height: 8),
+        // Explicit success button: with a background set it opens the
+        // crop/adjust dialog (drag to pan, slider to zoom, Apply to
+        // confirm); with none set it starts the image picker.
+        FilledButton.icon(
+          onPressed: () => _applyBackground(context, themeService),
+          icon: const Icon(Icons.check_circle_outline, size: 18),
+          label: Text(
+            hasMedia ? 'Apply background' : 'Choose & apply background',
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          hasMedia
+              ? 'Background shows on the new-tab page. Use Apply to crop/adjust its frame.'
+              : 'Pick an image or GIF, adjust its frame, then press Apply.',
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        if (hasMedia) ...[
+          const SizedBox(height: 4),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -271,6 +295,27 @@ class CustomizationPanel extends StatelessWidget {
         ],
       ],
     );
+  }
+
+  /// Explicit panel-level Apply: re-opens the crop/adjust dialog for the
+  /// current background (pan/zoom + Apply = success), or starts the picker
+  /// when nothing is set yet.
+  Future<void> _applyBackground(
+      BuildContext context, ThemeService themeService) async {
+    if (themeService.hasBackgroundMedia &&
+        themeService.backgroundImageBytes != null) {
+      await _adjustFraming(context, themeService);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Background applied'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } else {
+      await _pickImage(context, themeService);
+    }
   }
 
   Future<void> _pickImage(

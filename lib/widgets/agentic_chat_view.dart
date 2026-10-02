@@ -43,6 +43,26 @@ class _AgenticChatViewState extends State<AgenticChatView> {
   String _streamText = '';
   int _busyPhase = 0;
   static const _busyPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
+  // Honest staged labels for the blocking modes (research / project / image
+  // don't stream — the bubble cycles these stage names instead of sitting on
+  // one frozen line). They name pipeline stages, never fake percentages.
+  static const _modeBusyPhases = {
+    'web_search': ['Searching the web…', 'Reading results…', 'Writing answer…'],
+    'research': [
+      'Planning research…',
+      'Searching the web…',
+      'Reading sources…',
+      'Synthesizing answer…',
+    ],
+    'project': [
+      'Understanding request…',
+      'Gathering context…',
+      'Writing files…',
+      'Finalizing project…',
+    ],
+    'image': ['Imagining…', 'Sketching…', 'Applying final touches…'],
+  };
+  List<String> _activePhases = _busyPhases;
 
   static const Map<String, String> _modeLabels = {
     'auto': 'Chat',
@@ -155,6 +175,19 @@ class _AgenticChatViewState extends State<AgenticChatView> {
     AgentResponse result;
     text = outgoing;
 
+    // Blocking modes don't stream — give them staged status labels so the
+    // bubble keeps narrating real pipeline stages instead of freezing on
+    // the first line. Always cancelled when the result lands.
+    Timer? modeTimer;
+    if (_modeBusyPhases.containsKey(_mode)) {
+      _activePhases = _modeBusyPhases[_mode]!;
+      _busyPhase = 0;
+      setState(() {});
+      modeTimer = _phaseHeartbeat();
+    } else {
+      _activePhases = _busyPhases;
+    }
+
     if (_mode == 'image') {
       final imageData = await aiService.generateImage(text);
       result = AgentResponse(
@@ -185,6 +218,8 @@ class _AgenticChatViewState extends State<AgenticChatView> {
         if (result.sessionId.isNotEmpty) _sessionId = result.sessionId;
       }
     }
+    modeTimer?.cancel();
+    _activePhases = _busyPhases;
 
     final responseText = result.response.isNotEmpty
         ? result.response
@@ -245,12 +280,18 @@ class _AgenticChatViewState extends State<AgenticChatView> {
     return AgentResponse(response: text_, sessionId: _sessionId ?? '', mode: 'chat', isSimple: true);
   }
 
-  /// Advances [_busyPhase] every 2.5s until tokens arrive (cancelled by _streamChat).
+  /// Advances [_busyPhase] every 2.5s while the brain is still working
+  /// (cancelled by the caller when the result lands). Sticks on the last
+  /// stage rather than looping — looping would imply progress that isn't
+  /// real. The bubble itself cross-fades between the stage names.
   Timer _phaseHeartbeat() {
     return Timer.periodic(const Duration(milliseconds: 2500), (t) {
-      if (!mounted || !_isBusy || _streamText.isNotEmpty) return;
-      if (_busyPhase < _busyPhases.length - 1) {
+      if (!mounted || !_isBusy) return;
+      if (_streamText.isNotEmpty) return;
+      if (_busyPhase < _activePhases.length - 1) {
         setState(() => _busyPhase++);
+      } else {
+        t.cancel();
       }
     });
   }
@@ -362,7 +403,8 @@ class _AgenticChatViewState extends State<AgenticChatView> {
         if (index >= _messages.length) {
           // Live progress bubble: phased status while TTFT is pending, then
           // the streamed tokens themselves (never a bare dead spinner).
-          final label = _busyPhases[_busyPhase.clamp(0, _busyPhases.length - 1)];
+          final phases = _activePhases;
+          final label = phases[_busyPhase.clamp(0, phases.length - 1)];
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Align(
@@ -370,7 +412,11 @@ class _AgenticChatViewState extends State<AgenticChatView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  AiLoadingBubble(label: _streamText.isEmpty ? label : 'Writing'),
+                  AiLoadingBubble(
+                    label: label,
+                    phases: phases,
+                    initialPhase: _busyPhase.clamp(0, phases.length - 1),
+                  ),
                   if (_streamText.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     MarkdownBody(text: _streamText, onOpenUrl: _openUrl),
