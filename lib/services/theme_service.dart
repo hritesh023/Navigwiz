@@ -8,6 +8,9 @@ class ThemeService extends ChangeNotifier {
   static const String _backgroundImageKey = 'background_image_path';
   static const String _backgroundBytesKey = 'background_media_bytes';
   static const String _backgroundTypeKey = 'background_media_type';
+  static const String _backgroundZoomKey = 'background_zoom';
+  static const String _backgroundOffsetXKey = 'background_offset_x';
+  static const String _backgroundOffsetYKey = 'background_offset_y';
   static const String _primaryColorKey = 'primary_color';
   static const String _isDarkModeKey = 'is_dark_mode';
 
@@ -24,6 +27,9 @@ class ThemeService extends ChangeNotifier {
   String? _backgroundImagePath;
   Uint8List? _backgroundImageBytes;
   String _backgroundMediaType = 'none';
+  double _backgroundZoom = 1.0;
+  double _backgroundOffsetX = 0.0; // normalized -1..1
+  double _backgroundOffsetY = 0.0; // normalized -1..1
 
   ThemeData get lightTheme => _lightTheme;
   ThemeData get darkTheme => _darkTheme;
@@ -35,6 +41,21 @@ class ThemeService extends ChangeNotifier {
   String get backgroundMediaType => _backgroundMediaType;
   bool get hasBackgroundMedia => _backgroundImageBytes != null;
   bool get hasVideoBackground => _backgroundMediaType == 'video';
+
+  double get backgroundZoom => _backgroundZoom;
+  double get backgroundOffsetX => _backgroundOffsetX;
+  double get backgroundOffsetY => _backgroundOffsetY;
+
+  Future<void> setBackgroundFraming(
+      {required double zoom,
+      required double offsetX,
+      required double offsetY}) async {
+    _backgroundZoom = zoom.clamp(0.5, 4.0);
+    _backgroundOffsetX = offsetX.clamp(-1.0, 1.0);
+    _backgroundOffsetY = offsetY.clamp(-1.0, 1.0);
+    await _saveThemeSettings();
+    _updateTheme();
+  }
 
   Future<void> initialize() async {
     await _loadThemeSettings();
@@ -89,6 +110,9 @@ class ThemeService extends ChangeNotifier {
     _isDarkMode = prefs.getBool(_isDarkModeKey) ?? true;
     _backgroundImagePath = prefs.getString(_backgroundImageKey);
     _backgroundMediaType = prefs.getString(_backgroundTypeKey) ?? 'none';
+    _backgroundZoom = prefs.getDouble(_backgroundZoomKey) ?? 1.0;
+    _backgroundOffsetX = prefs.getDouble(_backgroundOffsetXKey) ?? 0.0;
+    _backgroundOffsetY = prefs.getDouble(_backgroundOffsetYKey) ?? 0.0;
     final encodedMedia = prefs.getString(_backgroundBytesKey);
     if (encodedMedia != null && encodedMedia.isNotEmpty) {
       try {
@@ -130,6 +154,9 @@ class ThemeService extends ChangeNotifier {
 
     _backgroundImageBytes = prepared;
     _backgroundImagePath = path;
+    _backgroundZoom = 1.0;
+    _backgroundOffsetX = 0.0;
+    _backgroundOffsetY = 0.0;
     // Preserve the gif type so the UI can render it animated.
     _backgroundMediaType = isGif ? 'gif' : 'image';
 
@@ -270,6 +297,9 @@ class ThemeService extends ChangeNotifier {
     await prefs.setBool(_isDarkModeKey, _isDarkMode);
     await prefs.setString(_backgroundImageKey, _backgroundImagePath ?? '');
     await prefs.setString(_backgroundTypeKey, _backgroundMediaType);
+    await prefs.setDouble(_backgroundZoomKey, _backgroundZoom);
+    await prefs.setDouble(_backgroundOffsetXKey, _backgroundOffsetX);
+    await prefs.setDouble(_backgroundOffsetYKey, _backgroundOffsetY);
     if (_backgroundImageBytes == null) {
       await prefs.remove(_backgroundBytesKey);
     } else {

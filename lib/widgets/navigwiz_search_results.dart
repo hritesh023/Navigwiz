@@ -6,6 +6,7 @@ import '../models/agent_response.dart';
 import '../services/ai_service.dart';
 import '../services/browser_service.dart';
 import 'markdown_body.dart';
+import 'ai_loading_bubble.dart';
 
 class NavigwizSearchResults extends StatefulWidget {
   final String query;
@@ -133,7 +134,9 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
 
     return Container(
       color: theme.scaffoldBackgroundColor,
-      child: _isLoading ? _buildLoading(theme) : _buildResults(theme),
+      child: _isLoading && _searchResponse == null
+          ? _buildLoading(theme)
+          : _buildResults(theme),
     );
   }
 
@@ -163,15 +166,8 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
             ),
             child: const Icon(Icons.search, color: Colors.white, size: 28),
           ),
-          const SizedBox(height: 18),
-          const CircularProgressIndicator(strokeWidth: 2.5),
           const SizedBox(height: 14),
-          Text(
-            'Navigwiz agentic AI is finding the best results…',
-            style: TextStyle(
-                fontSize: 13,
-                color: theme.colorScheme.onSurfaceVariant),
-          ),
+          const AiLoadingBubble(label: 'Navigwiz agentic AI is finding the best results'),
         ],
       ),
     );

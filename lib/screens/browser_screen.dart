@@ -458,15 +458,33 @@ class _BrowserScreenState extends State<BrowserScreen> {
         fit: StackFit.expand,
         children: [
           if (hasImageBackground)
-            Image.memory(
-              themeService.backgroundImageBytes!,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              filterQuality: FilterQuality.medium,
-              opacity: isPrivate
-                  ? const AlwaysStoppedAnimation(0.35)
-                  : const AlwaysStoppedAnimation(0.55),
-              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ClipRect(
+              child: Transform.translate(
+                offset: Offset(
+                  themeService.backgroundOffsetX *
+                      MediaQuery.sizeOf(context).width *
+                      0.25,
+                  themeService.backgroundOffsetY *
+                      MediaQuery.sizeOf(context).height *
+                      0.25,
+                ),
+                child: Transform.scale(
+                  scale: themeService.backgroundZoom,
+                  child: SizedBox.expand(
+                    child: Image.memory(
+                      themeService.backgroundImageBytes!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      filterQuality: FilterQuality.medium,
+                      opacity: isPrivate
+                          ? const AlwaysStoppedAnimation(0.35)
+                          : const AlwaysStoppedAnimation(0.55),
+                      errorBuilder: (_, __, ___) =>
+                          const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
+              ),
             ),
           content,
         ],

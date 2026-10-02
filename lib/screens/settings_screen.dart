@@ -8,6 +8,7 @@ import '../providers/auth_provider.dart';
 import '../services/browser_service.dart';
 import '../services/theme_service.dart';
 import '../widgets/color_picker_dialog.dart';
+import '../widgets/background_crop_dialog.dart';
 import 'history_screen.dart';
 import 'pricing_screen.dart';
 
@@ -481,11 +482,54 @@ class SettingsScreen extends StatelessWidget {
                               if (!themeService.hasBackgroundMedia) {
                                 return const SizedBox.shrink();
                               }
-                              return TextButton.icon(
-                                onPressed: () => themeService.removeBackgroundImage(),
-                                icon: const Icon(Icons.delete_outline, size: 16),
-                                label: const Text('Remove background',
-                                    style: TextStyle(fontSize: 12)),
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton.icon(
+                                    onPressed: () async {
+                                      final bytes =
+                                          themeService.backgroundImageBytes;
+                                      if (bytes == null) return;
+                                      await showDialog<void>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (_) => BackgroundCropDialog(
+                                          bytes: bytes,
+                                          initialZoom:
+                                              themeService.backgroundZoom,
+                                          initialOffsetX:
+                                              themeService.backgroundOffsetX,
+                                          initialOffsetY:
+                                              themeService.backgroundOffsetY,
+                                          onApply: (zoom, offsetX, offsetY) async {
+                                            await themeService
+                                                .setBackgroundFraming(
+                                                    zoom: zoom,
+                                                    offsetX: offsetX,
+                                                    offsetY: offsetY);
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(const SnackBar(
+                                                      content: Text(
+                                                          'Background framing updated')));
+                                            }
+                                          },
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.crop_free, size: 16),
+                                    label: const Text('Adjust framing',
+                                        style: TextStyle(fontSize: 12)),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        themeService.removeBackgroundImage(),
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 16),
+                                    label: const Text('Remove background',
+                                        style: TextStyle(fontSize: 12)),
+                                  ),
+                                ],
                               );
                             },
                           ),
@@ -727,6 +771,7 @@ class SettingsScreen extends StatelessWidget {
     final result = await FilePicker.platform.pickFiles(
       type: isGif ? FileType.custom : FileType.image,
       allowedExtensions: isGif ? ['gif'] : null,
+      withData: true,
     );
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
@@ -737,7 +782,25 @@ class SettingsScreen extends StatelessWidget {
       } catch (_) {}
     }
     if (bytes == null) return;
-    await themeService.setBackgroundImageBytes(bytes, path: file.path);
+    final picked = bytes;
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => BackgroundCropDialog(
+        bytes: picked,
+        onApply: (zoom, offsetX, offsetY) async {
+          await themeService.setBackgroundImageBytes(picked, path: file.path);
+          await themeService.setBackgroundFraming(
+              zoom: zoom, offsetX: offsetX, offsetY: offsetY);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Background applied')),
+            );
+          }
+        },
+      ),
+    );
   }
 
   void _addExtension(BuildContext context, SettingsProvider sp) async {

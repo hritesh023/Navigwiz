@@ -11,6 +11,7 @@ import '../services/browser_service.dart';
 import '../services/input_actions.dart';
 import '../utils/project_confirm.dart';
 import 'markdown_body.dart';
+import 'ai_loading_bubble.dart';
 
 class AgenticChatView extends StatefulWidget {
   final EdgeInsets padding;
@@ -369,18 +370,7 @@ class _AgenticChatViewState extends State<AgenticChatView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2)),
-                      const SizedBox(width: 10),
-                      Text(_streamText.isEmpty ? label : 'Writing…',
-                          style: const TextStyle(fontSize: 13)),
-                    ],
-                  ),
+                  AiLoadingBubble(label: _streamText.isEmpty ? label : 'Writing'),
                   if (_streamText.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     MarkdownBody(text: _streamText, onOpenUrl: _openUrl),

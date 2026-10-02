@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/theme_service.dart';
 import 'color_picker_dialog.dart';
+import 'background_crop_dialog.dart';
 
 class CustomizationPanel extends StatelessWidget {
   final VoidCallback onClose;
@@ -188,12 +189,23 @@ class CustomizationPanel extends StatelessWidget {
               color: Theme.of(context).dividerColor.withValues(alpha: 0.3)),
         ),
         child: hasMedia
-            ? Image.memory(
-                themeService.backgroundImageBytes!,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.medium,
-                errorBuilder: (_, __, ___) => _buildNoBackground(),
+            ? ClipRect(
+                child: Transform.translate(
+                  offset: Offset(
+                    themeService.backgroundOffsetX * 50,
+                    themeService.backgroundOffsetY * 30,
+                  ),
+                  child: Transform.scale(
+                    scale: themeService.backgroundZoom,
+                    child: Image.memory(
+                      themeService.backgroundImageBytes!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      filterQuality: FilterQuality.medium,
+                      errorBuilder: (_, __, ___) => _buildNoBackground(),
+                    ),
+                  ),
+                ),
               )
             : _buildNoBackground(),
       ),
@@ -239,14 +251,22 @@ class CustomizationPanel extends StatelessWidget {
         ),
         if (themeService.hasBackgroundMedia) ...[
           const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => themeService.removeBackgroundImage(),
-              icon: const Icon(Icons.delete_outline, size: 16),
-              label: const Text('Remove background',
-                  style: TextStyle(fontSize: 12)),
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton.icon(
+                onPressed: () => _adjustFraming(context, themeService),
+                icon: const Icon(Icons.crop_free, size: 16),
+                label: const Text('Adjust framing',
+                    style: TextStyle(fontSize: 12)),
+              ),
+              TextButton.icon(
+                onPressed: () => themeService.removeBackgroundImage(),
+                icon: const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Remove background',
+                    style: TextStyle(fontSize: 12)),
+              ),
+            ],
           ),
         ],
       ],
@@ -271,13 +291,13 @@ class CustomizationPanel extends StatelessWidget {
         }
         return;
       }
-      await themeService.setBackgroundImageBytes(bytes,
-          path: result.files.first.path ?? result.files.first.name);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Background updated'),
-              duration: Duration(seconds: 2)),
+        await _showCropAndApply(
+          context,
+          themeService,
+          bytes,
+          path: result.files.first.path ?? result.files.first.name,
+          kindLabel: 'Background',
         );
       }
     } catch (e) {
@@ -308,13 +328,13 @@ class CustomizationPanel extends StatelessWidget {
         }
         return;
       }
-      await themeService.setBackgroundImageBytes(bytes,
-          path: result.files.first.path ?? result.files.first.name);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Animated background updated'),
-              duration: Duration(seconds: 2)),
+        await _showCropAndApply(
+          context,
+          themeService,
+          bytes,
+          path: result.files.first.path ?? result.files.first.name,
+          kindLabel: 'Animated background',
         );
       }
     } catch (e) {
@@ -324,6 +344,59 @@ class CustomizationPanel extends StatelessWidget {
         );
       }
     }
+  }
+
+  Future<void> _showCropAndApply(
+    BuildContext context,
+    ThemeService themeService,
+    Uint8List bytes, {
+    required String path,
+    required String kindLabel,
+  }) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => BackgroundCropDialog(
+        bytes: bytes,
+        onApply: (zoom, offsetX, offsetY) async {
+          await themeService.setBackgroundImageBytes(bytes, path: path);
+          await themeService.setBackgroundFraming(
+              zoom: zoom, offsetX: offsetX, offsetY: offsetY);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content: Text('$kindLabel applied'),
+                  duration: const Duration(seconds: 2)),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _adjustFraming(
+      BuildContext context, ThemeService themeService) async {
+    final bytes = themeService.backgroundImageBytes;
+    if (bytes == null) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => BackgroundCropDialog(
+        bytes: bytes,
+        initialZoom: themeService.backgroundZoom,
+        initialOffsetX: themeService.backgroundOffsetX,
+        initialOffsetY: themeService.backgroundOffsetY,
+        onApply: (zoom, offsetX, offsetY) async {
+          await themeService.setBackgroundFraming(
+              zoom: zoom, offsetX: offsetX, offsetY: offsetY);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Background framing updated')),
+            );
+          }
+        },
+      ),
+    );
   }
 
   Future<Uint8List?> _readBytes(PlatformFile file) async {
