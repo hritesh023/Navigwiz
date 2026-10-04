@@ -23,7 +23,11 @@ class CentralAuthService {
   String? get userId => _userId;
   String? get userName => _userName;
 
-  static const String _authBaseUrl = 'https://navigwiz.acronous.com';
+  // Single Acronous account: auth lives on acronous.com (same AUTH_USERS KV
+  // and same JWT-secret contract as the navigwiz-auth worker). The old
+  // navigwiz.acronous.com base issued tokens the central billing worker and
+  // sister apps could not verify, which surfaced as 401s after paying.
+  static const String _authBaseUrl = 'https://acronous.com';
 
   String get _authUrl => _authBaseUrl;
 
@@ -48,6 +52,9 @@ class CentralAuthService {
   }
 
   void _extractTokenFromUrl() {
+    // Web-only (?token= SSO handoff). No-op on Android/iOS/desktop where
+    // package:web window access would throw.
+    if (!kIsWeb) return;
     try {
       final uri = Uri.parse(web.window.location.href);
       final token = uri.queryParameters['token'];
@@ -167,10 +174,12 @@ class CentralAuthService {
   }
 
   void redirectToLogout() {
+    if (!kIsWeb) return;
     web.window.location.href = '$_authUrl/logout';
   }
 
   void redirectToLogin() {
+    if (!kIsWeb) return;
     final currentUrl = web.window.location.href;
     web.window.location.href =
         '$_authUrl/login?redirect=${Uri.encodeComponent(currentUrl)}';

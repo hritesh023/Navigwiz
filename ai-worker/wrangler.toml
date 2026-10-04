@@ -22,13 +22,17 @@ EDITOR_SERVICE_URL = "https://image-service.acronous.com"
 # Shared Acronous LLM brain: RAG fast path + human-eval teach-back.
 BRAIN_URL = "https://brain.acronous.com"
 RAG_ENABLED = "true"
+# Central subscription authority. Was previously unset (code fell back to the
+# same default) — set explicitly so billing 401/402s are diagnosable from
+# `wrangler tail` instead of looking like a missing-env bug.
+BILLING_BASE_URL = "https://api.acronous.com"
 
 # Keep Contabo brain + tunnel warm; scheduled() pings brain every 5 min.
 [triggers]
 crons = ["*/5 * * * *"]
 
 [env.production]
-vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://ollama.acronous.com", CONTABO_LLM_MODEL = "qwen3.5:2b", CONTABO_LLM_KEY = "", EDITOR_SERVICE_URL = "https://image-service.acronous.com", BRAIN_URL = "https://brain.acronous.com", RAG_ENABLED = "true" }
+vars = { SEARCH_ENABLED = "true", ENVIRONMENT = "production", CONTABO_LLM_URL = "https://ollama.acronous.com", CONTABO_LLM_MODEL = "qwen3.5:2b", CONTABO_LLM_KEY = "", EDITOR_SERVICE_URL = "https://image-service.acronous.com", BRAIN_URL = "https://brain.acronous.com", RAG_ENABLED = "true", BILLING_BASE_URL = "https://api.acronous.com" }
 routes = [
   { pattern = "navigwiz-ai.acronous.com", custom_domain = true },
 ]
