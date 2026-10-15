@@ -253,6 +253,7 @@ class AIService extends ChangeNotifier {
     List<Map<String, String>> sources,
   ) async {
     if (!AppConfig.hasWorker) return '';
+    final token = CentralAuthService().token;
     for (var attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) {
         await Future.delayed(const Duration(milliseconds: 800));
@@ -261,7 +262,10 @@ class AIService extends ChangeNotifier {
         final response = await http
             .post(
               Uri.parse('${AppConfig.workerUrl}/v1/answer'),
-              headers: {'Content-Type': 'application/json'},
+              headers: {
+                'Content-Type': 'application/json',
+                if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+              },
               body: json.encode({
                 'query': query,
                 'sources': sources,
@@ -498,10 +502,12 @@ class AIService extends ChangeNotifier {
     if (!AppConfig.hasWorker) return;
     final client = http.Client();
     try {
+      final token = CentralAuthService().token;
       final req = http.Request('POST', Uri.parse('${AppConfig.workerUrl}/v1/chat/stream'))
         ..headers['Content-Type'] = 'application/json'
-        ..headers['Accept'] = 'text/event-stream'
-        ..body = json.encode({'message': input, 'session_id': sessionId ?? 'navigwiz'});
+        ..headers['Accept'] = 'text/event-stream';
+      if (token != null && token.isNotEmpty) req.headers['Authorization'] = 'Bearer $token';
+      req.body = json.encode({'message': input, 'session_id': sessionId ?? 'navigwiz'});
       final streamed = await client.send(req).timeout(const Duration(seconds: 30));
       if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
         await streamed.stream.drain<void>().catchError((_) {});
@@ -617,10 +623,14 @@ class AIService extends ChangeNotifier {
       );
     }
     try {
+      final token = CentralAuthService().token;
       final response = await http
           .post(
             Uri.parse('${AppConfig.workerUrl}/v1/research'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+            },
             body: json.encode({'query': query, 'session_id': 'navigwiz'}),
           )
           .timeout(_agentTimeout);
@@ -654,10 +664,14 @@ class AIService extends ChangeNotifier {
       );
     }
     try {
+      final token = CentralAuthService().token;
       final response = await http
           .post(
             Uri.parse('${AppConfig.workerUrl}/v1/project/generate'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+            },
             body: json.encode({
               'description': description,
               if (language != null) 'language': language,
@@ -697,10 +711,14 @@ class AIService extends ChangeNotifier {
       );
     }
     try {
+      final token = CentralAuthService().token;
       final response = await http
           .post(
             Uri.parse('${AppConfig.workerUrl}/v1/agent/build'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+            },
             body: json.encode({
               'description': description,
               if (language != null) 'language': language,
@@ -730,10 +748,14 @@ class AIService extends ChangeNotifier {
   Future<String> generateImage(String prompt) async {
     if (!AppConfig.hasWorker) return '';
     try {
+      final token = CentralAuthService().token;
       final response = await http
           .post(
             Uri.parse('${AppConfig.workerUrl}/v1/image/generate'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+            },
             body: json.encode({
               'prompt': prompt,
               'session_id': 'navigwiz',

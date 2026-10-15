@@ -45,9 +45,26 @@ class NavigwizBillingService extends ChangeNotifier {
     final r = await http
         .post(Uri.parse('$billingHost$path'), headers: _headers, body: jsonEncode(body))
         .timeout(const Duration(seconds: 30));
-    final j = jsonDecode(r.body);
-    if (r.statusCode != 200 || j is! Map<String, dynamic>) {
-      final msg = (j is Map ? j['error']?.toString() : null);
+    // HTML fallback (SPA index.html) for a billing miss used to surface as
+    // "Request failed (404)" on payment buttons. Detect and explain.
+    final ct = r.headers['content-type'] ?? '';
+    final trimmed = r.body.trimLeft();
+    if (trimmed.startsWith('<') || (!ct.contains('json') && trimmed.startsWith('<!'))) {
+      throw StateError(
+          'Payment service returned a page instead of an order. Please retry — if it persists use acronous.com/pricing.html#nav.');
+    }
+    Map<String, dynamic>? j;
+    try {
+      final d = jsonDecode(r.body);
+      if (d is Map<String, dynamic>) j = d;
+    } catch (_) {
+      j = null;
+    }
+    if (j == null) {
+      throw StateError('Bad payment response. Please try again.');
+    }
+    if (r.statusCode != 200) {
+      final msg = j['error']?.toString();
       throw StateError(msg?.isNotEmpty ?? false
           ? msg!
           : 'Request failed (${r.statusCode}). Please try again.');
@@ -109,12 +126,22 @@ class NavigwizBillingService extends ChangeNotifier {
           themeColor: '#f59e0b',
         );
       } on UnsupportedError {
-        // Desktop: complete payment on the hosted auto-checkout page.
+        // Desktop: complete payment on the hosted auto-checkout page, which
+        // verifies server-side. Poll status on return instead of claiming
+        // success blindly (old code returned true without verify, so the
+        // plan looked unpaid until manual refresh).
         await launchUrl(
           Uri.parse(checkoutFallbackUrl(
               token: CentralAuthService().token, plan: plan.id)),
           mode: LaunchMode.externalApplication,
         );
+        // Give the hosted checkout a moment, then re-read entitlements.
+        // Caller still returns true (checkout opened), but activePlanId is
+        // now refreshed so paid users don't loop back to PricingScreen.
+        try {
+          await Future.delayed(const Duration(seconds: 2));
+          await refresh();
+        } catch (_) {}
         return true;
       }
       await _postJson('/v1/billing/verify', {

@@ -373,7 +373,12 @@ async function handleAuthRequest(request, url, env) {
       headers,
       body: request.body,
     }));
+    // Never SPA-fallback API misses to index.html — that breaks billing JSON.
     if (proxyRes.status === 404) {
+      if (url.pathname === '/v1' || url.pathname.startsWith('/v1/') ||
+          url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+        return corsResponse({ error: 'Not found: ' + url.pathname }, 404, allowedOrigin(request));
+      }
       const indexRes = await fetch(appUrl + '/index.html');
       return new Response(indexRes.body, { status: 200, headers: indexRes.headers });
     }
