@@ -101,14 +101,34 @@ class NavigwizBillingService extends ChangeNotifier {
 
   /// Opens the real Razorpay gateway for [plan] and verifies the payment.
   /// Returns true when the plan is now active. Cancellation returns false
-  /// quietly; failures set [error].
+  /// quietly; failures set [error]. If the API order endpoint is unreachable
+  /// (404/502 — stale deploy), falls through to the hosted Razorpay checkout
+  /// on acronous.com so the button never dead-ends.
   Future<bool> buy(NavPlan plan) async {
     if (busyPlanId != null) return false;
     busyPlanId = plan.id;
     error = null;
     notifyListeners();
     try {
-      final order = await _postJson('/v1/billing/order', {'plan': plan.id});
+      Map<String, dynamic> order;
+      try {
+        order = await _postJson('/v1/billing/order', {'plan': plan.id});
+      } catch (e) {
+        final m = e.toString();
+        if (m.contains('404') || m.contains('502') || m.contains('temporarily unavailable') || m.contains('returned a page')) {
+          await launchUrl(
+            Uri.parse(checkoutFallbackUrl(
+                token: CentralAuthService().token, plan: plan.id)),
+            mode: LaunchMode.externalApplication,
+          );
+          try {
+            await Future.delayed(const Duration(seconds: 2));
+            await refresh();
+          } catch (_) {}
+          return true;
+        }
+        rethrow;
+      }
       final orderId = order['order_id'] as String? ?? '';
       final amount = (order['amount'] as num?)?.toInt() ?? 0;
       final keyId = order['key_id'] as String? ?? '';

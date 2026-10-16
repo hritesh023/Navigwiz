@@ -189,8 +189,10 @@ async function handleAuthRequest(request, url, env) {
 
   // Same-origin billing proxy → central worker (mirrors acronous.com).
   // Without this, /v1/billing/* on navigwiz.acronous.com 404s/SPA-falls-back
-  // and checkout dies with confusing auth errors.
-  const BILLING_PREFIXES = ['/v1/billing/', '/v1/api/', '/api/create-order', '/api/verify-payment'];
+  // and checkout dies with confusing auth errors. Bare + slash variants both
+  // match so /v1/billing?x= and /v1/billing/status both proxy (the old
+  // trailing-slash-only list missed the bare path and fell to index.html).
+  const BILLING_PREFIXES = ['/v1/billing', '/v1/billing/', '/v1/api', '/v1/api/', '/api/create-order', '/api/verify-payment', '/api/billing-webhook', '/api/billing-entitlements', '/api/billing-status', '/api/billing', '/api/billing/'];
   const isBilling = BILLING_PREFIXES.some(p => path === p || path.startsWith(p));
   if (isBilling) {
     const target = CENTRAL_BILLING + path + url.search;
