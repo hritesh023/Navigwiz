@@ -77,6 +77,15 @@ class NavigwizBillingService extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      // Link any guest-paid plan (paid without sign-in, same email) first.
+      try {
+        if (CentralAuthService().token != null) {
+          await http
+              .post(Uri.parse('$billingHost/v1/billing/claim'),
+                  headers: _headers, body: jsonEncode({}))
+              .timeout(const Duration(seconds: 20));
+        }
+      } catch (_) {}
       final r = await http
           .get(Uri.parse('$billingHost/v1/billing/status?product=navigwiz'),
               headers: _headers)
@@ -104,8 +113,17 @@ class NavigwizBillingService extends ChangeNotifier {
   /// quietly; failures set [error]. If the API order endpoint is unreachable
   /// (404/502 — stale deploy), falls through to the hosted Razorpay checkout
   /// on acronous.com so the button never dead-ends.
+  /// No sign-in wall: signed-out buyers go straight to hosted Razorpay
+  /// checkout (email links the plan on next sign-in).
   Future<bool> buy(NavPlan plan) async {
     if (busyPlanId != null) return false;
+    if (CentralAuthService().token == null) {
+      await launchUrl(
+        Uri.parse(checkoutFallbackUrl(plan: plan.id)),
+        mode: LaunchMode.externalApplication,
+      );
+      return true;
+    }
     busyPlanId = plan.id;
     error = null;
     notifyListeners();
