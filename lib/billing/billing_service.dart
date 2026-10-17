@@ -117,78 +117,19 @@ class NavigwizBillingService extends ChangeNotifier {
   /// checkout (email links the plan on next sign-in).
   Future<bool> buy(NavPlan plan) async {
     if (busyPlanId != null) return false;
-    if (CentralAuthService().token == null) {
-      await launchUrl(
-        Uri.parse(checkoutFallbackUrl(plan: plan.id)),
-        mode: LaunchMode.externalApplication,
-      );
-      return true;
-    }
     busyPlanId = plan.id;
     error = null;
     notifyListeners();
     try {
-      Map<String, dynamic> order;
+      await launchUrl(
+        Uri.parse(checkoutFallbackUrl(
+            token: CentralAuthService().token, plan: plan.id)),
+        mode: LaunchMode.externalApplication,
+      );
       try {
-        order = await _postJson('/v1/billing/order', {'plan': plan.id});
-      } catch (e) {
-        final m = e.toString();
-        if (m.contains('404') || m.contains('502') || m.contains('temporarily unavailable') || m.contains('returned a page')) {
-          await launchUrl(
-            Uri.parse(checkoutFallbackUrl(
-                token: CentralAuthService().token, plan: plan.id)),
-            mode: LaunchMode.externalApplication,
-          );
-          try {
-            await Future.delayed(const Duration(seconds: 2));
-            await refresh();
-          } catch (_) {}
-          return true;
-        }
-        rethrow;
-      }
-      final orderId = order['order_id'] as String? ?? '';
-      final amount = (order['amount'] as num?)?.toInt() ?? 0;
-      final keyId = order['key_id'] as String? ?? '';
-      if (orderId.isEmpty || keyId.isEmpty || amount <= 0) {
-        throw StateError('Could not start checkout. Please try again.');
-      }
-      late final GatewayResult g;
-      try {
-        g = await openRazorpayCheckout(
-          keyId: keyId,
-          amountPaise: amount,
-          orderId: orderId,
-          planLabel:
-              '${plan.label.replaceAll(' ⭐', '')} (${formatPlanPrice(plan.priceInr)}/mo)',
-          themeColor: '#f59e0b',
-        );
-      } on UnsupportedError {
-        // Desktop: complete payment on the hosted auto-checkout page, which
-        // verifies server-side. Poll status on return instead of claiming
-        // success blindly (old code returned true without verify, so the
-        // plan looked unpaid until manual refresh).
-        await launchUrl(
-          Uri.parse(checkoutFallbackUrl(
-              token: CentralAuthService().token, plan: plan.id)),
-          mode: LaunchMode.externalApplication,
-        );
-        // Give the hosted checkout a moment, then re-read entitlements.
-        // Caller still returns true (checkout opened), but activePlanId is
-        // now refreshed so paid users don't loop back to PricingScreen.
-        try {
-          await Future.delayed(const Duration(seconds: 2));
-          await refresh();
-        } catch (_) {}
-        return true;
-      }
-      await _postJson('/v1/billing/verify', {
-        'razorpay_order_id': g.orderId,
-        'razorpay_payment_id': g.paymentId,
-        'razorpay_signature': g.signature,
-        'plan': plan.id,
-      });
-      await refresh();
+        await Future.delayed(const Duration(seconds: 2));
+        await refresh();
+      } catch (_) {}
       return true;
     } on PaymentCancelled {
       return false;
