@@ -54,9 +54,16 @@ class ProjectProvider extends ChangeNotifier {
 
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('project_files');
-    if (saved != null) {
-      final list = jsonDecode(saved) as List;
-      _files = list.map((f) => ProjectFile.fromJson(f)).toList();
+    if (saved != null && saved.isNotEmpty) {
+      try {
+        final list = jsonDecode(saved) as List;
+        _files = list
+            .whereType<Map>()
+            .map((f) => ProjectFile.fromJson(Map<String, dynamic>.from(f)))
+            .toList();
+      } catch (_) {
+        _files = [];
+      }
     }
 
     _isLoading = false;

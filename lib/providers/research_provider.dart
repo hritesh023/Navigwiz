@@ -34,9 +34,16 @@ class ResearchProvider extends ChangeNotifier {
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('research_objectives');
-    if (saved != null) {
-      final list = jsonDecode(saved) as List;
-      _objectives = list.map((o) => TaskObjective.fromJson(o)).toList();
+    if (saved != null && saved.isNotEmpty) {
+      try {
+        final list = jsonDecode(saved) as List;
+        _objectives = list
+            .whereType<Map>()
+            .map((o) => TaskObjective.fromJson(Map<String, dynamic>.from(o)))
+            .toList();
+      } catch (_) {
+        _objectives = [];
+      }
     }
     notifyListeners();
   }
