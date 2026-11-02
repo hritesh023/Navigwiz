@@ -838,21 +838,44 @@ class SettingsScreen extends StatelessWidget {
   }
 
   void _addExtension(BuildContext context, SettingsProvider sp) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-    );
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+        withData: false,
+      );
+    } catch (_) {
+      result = null;
+    }
+    String? pickedPath;
+    String pickedName = '';
     if (result != null && result.files.isNotEmpty) {
       final file = result.files.first;
-      final nameController = TextEditingController(text: file.name);
-      // Web-safe: `PlatformFile.path` throws on web — fall back to name.
-      String extPath = file.name;
+      pickedName = file.name;
       if (!kIsWeb) {
         try {
-          extPath = file.path ?? file.name;
+          pickedPath = file.path ?? file.name;
         } catch (_) {
-          extPath = file.name;
+          pickedPath = file.name;
         }
+      } else {
+        pickedPath = file.name;
       }
+    } else if (!kIsWeb) {
+      // Fall back to picking an unpacked extension directory (manifest.json).
+      try {
+        pickedPath = await FilePicker.platform.getDirectoryPath();
+        if (pickedPath != null && pickedPath.isNotEmpty) {
+          pickedName = pickedPath.split(RegExp(r'[\\\\/]')).last;
+        }
+      } catch (_) {
+        pickedPath = null;
+      }
+    }
+    if (pickedPath == null || pickedPath.isEmpty) return;
+      final nameController = TextEditingController(text: pickedName.isNotEmpty ? pickedName : 'Extension');
+      String extPath = pickedPath;
 
       if (context.mounted) {
         showDialog(
@@ -884,7 +907,6 @@ class SettingsScreen extends StatelessWidget {
           ),
         );
       }
-    }
   }
 }
 
