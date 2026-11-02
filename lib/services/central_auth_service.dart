@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web/web.dart' as web;
+import 'web_location_stub.dart'
+    if (dart.library.js_interop) 'web_location_web.dart' as wloc;
 
 class CentralAuthService {
   static final CentralAuthService _instance = CentralAuthService._();
@@ -56,12 +57,14 @@ class CentralAuthService {
     // package:web window access would throw.
     if (!kIsWeb) return;
     try {
-      final uri = Uri.parse(web.window.location.href);
+      final href = wloc.currentHref();
+      if (href == null) return;
+      final uri = Uri.parse(href);
       final token = uri.queryParameters['token'];
       if (token != null && token.isNotEmpty) {
         _token = token;
         final cleanUrl = uri.origin + uri.path;
-        web.window.history.replaceState(null, '', cleanUrl);
+        wloc.replaceState(cleanUrl);
       }
     } catch (_) {}
   }
@@ -175,13 +178,13 @@ class CentralAuthService {
 
   void redirectToLogout() {
     if (!kIsWeb) return;
-    web.window.location.href = '$_authUrl/logout';
+    wloc.redirectTo('$_authUrl/logout');
   }
 
   void redirectToLogin() {
     if (!kIsWeb) return;
-    final currentUrl = web.window.location.href;
-    web.window.location.href =
-        '$_authUrl/login?redirect=${Uri.encodeComponent(currentUrl)}';
+    final currentUrl = wloc.currentHref() ?? '';
+    wloc.redirectTo(
+        '$_authUrl/login?redirect=${Uri.encodeComponent(currentUrl)}');
   }
 }

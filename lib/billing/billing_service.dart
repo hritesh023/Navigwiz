@@ -10,7 +10,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import '../services/central_auth_service.dart';
-import 'pay_gateway.dart';
 import 'pay_result.dart';
 import 'plans.dart';
 
@@ -38,38 +37,6 @@ class NavigwizBillingService extends ChangeNotifier {
       'Content-Type': 'application/json',
       if (t != null) 'Authorization': 'Bearer $t',
     };
-  }
-
-  Future<Map<String, dynamic>> _postJson(
-      String path, Map<String, dynamic> body) async {
-    final r = await http
-        .post(Uri.parse('$billingHost$path'), headers: _headers, body: jsonEncode(body))
-        .timeout(const Duration(seconds: 30));
-    // HTML fallback (SPA index.html) for a billing miss used to surface as
-    // "Request failed (404)" on payment buttons. Detect and explain.
-    final ct = r.headers['content-type'] ?? '';
-    final trimmed = r.body.trimLeft();
-    if (trimmed.startsWith('<') || (!ct.contains('json') && trimmed.startsWith('<!'))) {
-      throw StateError(
-          'Payment service returned a page instead of an order. Please retry — if it persists use acronous.com/pricing.html#nav.');
-    }
-    Map<String, dynamic>? j;
-    try {
-      final d = jsonDecode(r.body);
-      if (d is Map<String, dynamic>) j = d;
-    } catch (_) {
-      j = null;
-    }
-    if (j == null) {
-      throw StateError('Bad payment response. Please try again.');
-    }
-    if (r.statusCode != 200) {
-      final msg = j['error']?.toString();
-      throw StateError(msg?.isNotEmpty ?? false
-          ? msg!
-          : 'Request failed (${r.statusCode}). Please try again.');
-    }
-    return j;
   }
 
   Future<void> refresh() async {

@@ -10,7 +10,8 @@ import 'services/theme_service.dart';
 import 'services/logging_service.dart';
 import 'services/analytics_service.dart';
 import 'services/update_service.dart';
-import 'services/service_worker_updater.dart';
+import 'services/service_worker_updater_stub.dart'
+    if (dart.library.js_interop) 'services/service_worker_updater.dart';
 import 'services/window_control_service.dart';
 import 'services/central_auth_service.dart';
 import 'billing/paywall.dart';
