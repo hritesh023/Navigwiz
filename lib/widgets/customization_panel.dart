@@ -232,7 +232,7 @@ class _CustomizationPanelState extends State<CustomizationPanel> {
                       themeService.backgroundImageBytes!,
                       fit: BoxFit.cover,
                       gaplessPlayback: true,
-                      filterQuality: FilterQuality.medium,
+                      filterQuality: FilterQuality.high,
                       errorBuilder: (_, __, ___) => _buildNoBackground(
                         message:
                             'Saved file is unreadable — pick a new one.',

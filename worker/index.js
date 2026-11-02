@@ -283,7 +283,7 @@ async function searchSearxng(query, category, maxResults) {
       if (rawResults.length === 0) continue;
 
       return {
-        results: rawResults.slice(0, maxResults || 50).map((r) => ({
+        results: rawResults.slice(0, maxResults || 100).map((r) => ({
           title: r.title || '',
           url: r.url || '',
           content: r.content || r.snippet || '',
@@ -322,7 +322,7 @@ async function handleSearch(request) {
 
   const category = url.searchParams.get('category') || 'all';
 
-  const searxngResult = await searchSearxng(query, category, 50);
+  const searxngResult = await searchSearxng(query, category, 100);
   if (searxngResult) {
     return respondJson({
       results: searxngResult.results,

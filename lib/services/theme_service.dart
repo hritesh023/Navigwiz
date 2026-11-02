@@ -28,8 +28,8 @@ class ThemeService extends ChangeNotifier {
   /// Refuse to decode files larger than this (OOM guard on web: decoding
   /// allocates width x height x 4 per frame).
   static const int maxDecodeBytes = 12 * 1024 * 1024;
-  static const int maxGifSide = 960;
-  static const int maxGifFrames = 48;
+  static const int maxGifSide = 1280;
+  static const int maxGifFrames = 60;
 
   /// Extensions Flutter can actually render via Image.memory (Skia codec).
   /// The picker is restricted to these so users can't select SVG/AVIF/HEIC
@@ -219,9 +219,18 @@ class ThemeService extends ChangeNotifier {
     if (unsupported != null) {
       throw StateError(unsupported);
     }
-    final Uint8List prepared = isGifBytes(raw)
-        ? await _compressGifImage(raw)
-        : await _compressStaticImage(raw);
+    // Preserve original quality whenever the file already fits the storage
+    // quota. Compression is lossy (downscale + re-encode) and was making
+    // uploaded images/GIFs blurry and GIFs gain black shades, so only
+    // compress when strictly necessary to fit SharedPreferences/localStorage.
+    Uint8List prepared;
+    if (raw.lengthInBytes <= targetBackgroundBytes) {
+      prepared = raw;
+    } else {
+      prepared = isGifBytes(raw)
+          ? await _compressGifImage(raw)
+          : await _compressStaticImage(raw);
+    }
     if (prepared.lengthInBytes > maxBackgroundBytes) {
       throw StateError(
           'That file is still too large (${(prepared.lengthInBytes / 1048576).toStringAsFixed(1)} MB) even after compression. Please pick a smaller image/GIF.');
@@ -430,7 +439,7 @@ class ThemeService extends ChangeNotifier {
           Uint8List.fromList(img.encodeJpg(src, quality: quality));
       Uint8List encodePng(img.Image src) =>
           Uint8List.fromList(img.encodePng(src));
-      var out = keepAlpha ? encodePng(working) : encodeJpg(working, 82);
+      var out = keepAlpha ? encodePng(working) : encodeJpg(working, 92);
       if (out.lengthInBytes > targetBackgroundBytes &&
           (working.width > 1280 || working.height > 1280)) {
         final landscape = working.width >= working.height;
@@ -441,7 +450,7 @@ class ThemeService extends ChangeNotifier {
           interpolation: img.Interpolation.linear,
         );
         final retry =
-            keepAlpha ? encodePng(smaller) : encodeJpg(smaller, 72);
+            keepAlpha ? encodePng(smaller) : encodeJpg(smaller, 84);
         if (retry.lengthInBytes < out.lengthInBytes) out = retry;
       }
       // If re-encoding somehow grew the file, keep the original.

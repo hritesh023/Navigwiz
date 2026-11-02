@@ -190,7 +190,19 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
     ));
     // Photos strip when the query merits visuals (image results present).
     if (images.isNotEmpty) {
-      items.add(_buildImageStrip(theme, images));
+      items.add(_buildImageStrip(theme, images, 'Photos', Icons.image_outlined));
+    }
+    final videos = response?.videoResults ?? const <SearchResult>[];
+    if (videos.isNotEmpty) {
+      items.add(_buildImageStrip(theme, videos, 'Videos', Icons.play_circle_outline));
+    }
+    final books = response?.bookResults ?? const <SearchResult>[];
+    if (books.isNotEmpty) {
+      items.add(_buildImageStrip(theme, books, 'Books', Icons.menu_book_outlined));
+    }
+    final news = response?.newsResults ?? const <SearchResult>[];
+    if (news.isNotEmpty) {
+      items.add(_buildImageStrip(theme, news, 'News', Icons.article_outlined));
     }
     if (response != null && response.suggestions.isNotEmpty) {
       items.add(_buildSuggestions(theme));
@@ -426,7 +438,8 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
     );
   }
 
-  Widget _buildImageStrip(ThemeData theme, List<SearchResult> images) {
+  Widget _buildImageStrip(ThemeData theme, List<SearchResult> images,
+      [String title = 'Photos', IconData icon = Icons.image_outlined]) {
     final withThumbs =
         images.where((r) => (r.imageUrl ?? '').isNotEmpty).take(10).toList();
     final fallback = withThumbs.isEmpty
@@ -440,10 +453,10 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
           child: Row(
             children: [
-              Icon(Icons.image_outlined,
+              Icon(icon,
                   size: 15, color: theme.colorScheme.primary),
               const SizedBox(width: 6),
-              Text('Photos',
+              Text(title,
                   style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -558,6 +571,9 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
     final primary = theme.colorScheme.primary;
     final domain = _domainOf(result.url);
     final letter = domain.isNotEmpty ? domain[0].toUpperCase() : '?';
+    final faviconUrl = domain.isNotEmpty
+        ? 'https://www.google.com/s2/favicons?domain=${Uri.encodeComponent(domain)}&sz=64'
+        : null;
 
     return Material(
       color: theme.colorScheme.surface,
@@ -589,11 +605,23 @@ class _NavigwizSearchResultsState extends State<NavigwizSearchResults> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 alignment: Alignment.center,
-                child: Text(letter,
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: primary)),
+                child: faviconUrl == null
+                    ? Text(letter,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: primary))
+                    : Image.network(
+                        faviconUrl,
+                        width: 22,
+                        height: 22,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => Text(letter,
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: primary)),
+                      ),
               ),
               const SizedBox(width: 12),
               Expanded(

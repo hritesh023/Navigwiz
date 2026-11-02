@@ -488,10 +488,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       themeService.backgroundImageBytes!,
                       fit: BoxFit.cover,
                       gaplessPlayback: true,
-                      filterQuality: FilterQuality.medium,
+                      filterQuality: FilterQuality.high,
                       opacity: isPrivate
-                          ? const AlwaysStoppedAnimation(0.35)
-                          : const AlwaysStoppedAnimation(0.55),
+                          ? const AlwaysStoppedAnimation(0.4)
+                          : const AlwaysStoppedAnimation(0.8),
                       errorBuilder: (_, __, ___) =>
                           const SizedBox.shrink(),
                     ),

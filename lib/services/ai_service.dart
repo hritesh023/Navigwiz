@@ -106,7 +106,7 @@ class AIMessage {
 }
 
 class AIService extends ChangeNotifier {
-  static const int _maxResults = 50;
+  static const int _maxResults = 100;
 
   final SecureStorageService _secureStorage = SecureStorageService();
   final LoggingService _logger = LoggingService();
@@ -175,15 +175,25 @@ class AIService extends ChangeNotifier {
 
     List<SearchResult> results = [];
     List<SearchResult> imageResults = [];
+    List<SearchResult> videoResults = [];
+    List<SearchResult> bookResults = [];
+    List<SearchResult> newsResults = [];
     List<String> suggestions = [];
     List<Infobox> infoboxes = [];
     List<String> answers = [];
     int? resultCount;
 
-    // Web results + photos fire TOGETHER (not serially): total wait is the
-    // slower of the two, not the sum. Best-effort on images.
+    // Web results + photos + videos + news fire TOGETHER (not serially).
     final webFuture = _searchFull(query, forceRefresh: forceRefresh);
     final imagesFuture = searchImages(query).timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => const <SearchResult>[],
+    ).catchError((_) => const <SearchResult>[]);
+    final videosFuture = searchByCategory(query, 'videos').timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => const <SearchResult>[],
+    ).catchError((_) => const <SearchResult>[]);
+    final newsFuture = searchByCategory(query, 'news').timeout(
       const Duration(seconds: 3),
       onTimeout: () => const <SearchResult>[],
     ).catchError((_) => const <SearchResult>[]);
@@ -199,6 +209,16 @@ class AIService extends ChangeNotifier {
     } catch (_) {
       imageResults = const <SearchResult>[];
     }
+    try {
+      videoResults = await videosFuture;
+    } catch (_) {
+      videoResults = const <SearchResult>[];
+    }
+    try {
+      newsResults = await newsFuture;
+    } catch (_) {
+      newsResults = const <SearchResult>[];
+    }
 
     String aiAnswer = '';
     if (waitForAi) {
@@ -212,6 +232,9 @@ class AIService extends ChangeNotifier {
       aiAnswer: aiAnswer,
       results: results,
       imageResults: imageResults,
+      videoResults: videoResults,
+      newsResults: newsResults,
+      bookResults: bookResults,
       suggestions: suggestions,
       infoboxes: infoboxes,
       answers: answers,

@@ -22,7 +22,10 @@ class LLMService:
             self._llm = ChatOllama(
                 model="llama3.2",
                 temperature=0.7,
-                num_predict=4096
+                num_predict=2048,
+                num_ctx=4096,
+                num_thread=4,
+                num_gpu=0,
             )
 
     @property
