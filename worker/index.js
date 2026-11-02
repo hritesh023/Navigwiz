@@ -259,50 +259,75 @@ async function searchSearxng(query, category, maxResults) {
 
   for (const searxngUrl of SEARXNG_URLS) {
     try {
-      const searchUrl = new URL(searxngUrl);
-      searchUrl.searchParams.set('q', query);
-      searchUrl.searchParams.set('format', 'json');
-      searchUrl.searchParams.set('language', 'en');
-      searchUrl.searchParams.set('pageno', '1');
-      searchUrl.searchParams.set('categories', categories);
+      const merged = [];
+      const seen = new Set();
+      let suggestions = [];
+      let infoboxes = [];
+      let answers = [];
+      let numberOfResults = null;
+      for (let page = 1; page <= 3; page++) {
+        const searchUrl = new URL(searxngUrl);
+        searchUrl.searchParams.set('q', query);
+        searchUrl.searchParams.set('format', 'json');
+        searchUrl.searchParams.set('language', 'en');
+        searchUrl.searchParams.set('pageno', String(page));
+        searchUrl.searchParams.set('categories', categories);
 
-      const response = await fetch(searchUrl.toString(), {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'Navigwiz/1.0.0',
-        },
-      });
+        const response = await fetch(searchUrl.toString(), {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Navigwiz/1.0.0',
+          },
+        });
 
-      if (!response.ok) {
-        console.error(`SearXNG error on ${searxngUrl}: ${response.status}`);
-        continue;
+        if (!response.ok) {
+          console.error(`SearXNG error on ${searxngUrl}: ${response.status}`);
+          break;
+        }
+
+        const data = await response.json();
+        const rawResults = data.results || [];
+        if (rawResults.length === 0) break;
+
+        for (const r of rawResults) {
+          const key = r.url || r.title;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push({
+            title: r.title || '',
+            url: r.url || '',
+            content: r.content || r.snippet || '',
+            img_src: r.img_src || r.thumbnail_src || null,
+            publishedDate: r.publishedDate || null,
+          });
+          if (merged.length >= (maxResults || 100)) break;
+        }
+        if (page === 1) {
+          suggestions = (data.suggestions || []).map((s) => s.toString()).filter(Boolean);
+          infoboxes = (data.infoboxes || []).map((ib) => ({
+            title: ib.title || '',
+            content: ib.content || '',
+            url: ib.url || null,
+            img_src: ib.img_src || null,
+            attributes: (ib.attributes || []).map((a) => ({
+              label: a.label || '',
+              value: a.value || '',
+            })),
+          }));
+          answers = (data.answers || []).map((a) => a.toString()).filter(Boolean);
+          numberOfResults = data.number_of_results || null;
+        }
+        if (merged.length >= (maxResults || 100)) break;
       }
 
-      const data = await response.json();
-      const rawResults = data.results || [];
-      if (rawResults.length === 0) continue;
+      if (merged.length === 0) continue;
 
       return {
-        results: rawResults.slice(0, maxResults || 100).map((r) => ({
-          title: r.title || '',
-          url: r.url || '',
-          content: r.content || r.snippet || '',
-          img_src: r.img_src || r.thumbnail_src || null,
-          publishedDate: r.publishedDate || null,
-        })),
-        suggestions: (data.suggestions || []).map((s) => s.toString()).filter(Boolean),
-        infoboxes: (data.infoboxes || []).map((ib) => ({
-          title: ib.title || '',
-          content: ib.content || '',
-          url: ib.url || null,
-          img_src: ib.img_src || null,
-          attributes: (ib.attributes || []).map((a) => ({
-            label: a.label || '',
-            value: a.value || '',
-          })),
-        })),
-        answers: (data.answers || []).map((a) => a.toString()).filter(Boolean),
-        numberOfResults: data.number_of_results || null,
+        results: merged.slice(0, maxResults || 100),
+        suggestions,
+        infoboxes,
+        answers,
+        numberOfResults,
       };
     } catch (error) {
       console.error(`SearXNG proxy error on ${searxngUrl}:`, error.message);
